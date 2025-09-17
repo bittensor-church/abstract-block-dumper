@@ -28,12 +28,8 @@ def _get_all_active_netuids_cached(cache_key: int) -> list[int]:
     """
     Internal cached function for fetching active netuids.
 
-    Args:
-        cache_key: Time-based cache key for expiration
-
-    Returns:
-        List of active netuid integers
-
+    :cache_key: An integer key to control cache invalidation timing.
+    :return: List of active netuid integers
     """
     # cache_key is used for cache invalidation timing - not directly in function body
     try:
@@ -50,12 +46,8 @@ def get_all_active_netuids(cache_duration: int = 300) -> list[int]:
     """
     Get all active netuids with caching.
 
-    Args:
-        cache_duration: Cache duration in seconds (default: 5 minutes)
-
-    Returns:
-        List of active netuid integers
-
+    :cache_duration: Cache duration in seconds (default: 5 minutes)
+    :return: List of active netuid integers
     """
     # Create time-based cache key that expires every cache_duration seconds
     cache_key = int(time.time() // cache_duration)
