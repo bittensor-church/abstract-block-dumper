@@ -5,25 +5,56 @@ This package provides a framework for creating and managing block processing tas
 It allows developers to define tasks that process blockchain blocks using decorators and run them asynchronously using Celery.
 
 ## Prerequisites
+- Django
 - Celery
+- Redis (for Celery broker and result backend)
+- PostgreSQL (recommended for production)
 
-
-## Usage
+## Installation
 
 1. Install the package:
 ```bash
 pip install abstract_block_dumper
 ```
 
-2. Define block processing tasks in tasks.py or block_tasks.py file inside any of your installed Django apps.
+2. Add to your Django `INSTALLED_APPS`:
+```python
+INSTALLED_APPS = [
+    # ... other apps
+    'abstract_block_dumper',
+]
+```
 
-3. Use decorators to register tasks.
-    - Use `@block_task` to create a custom block processing task.
-    - Use shortcuts like `@every_block`, `@every_n_blocks`, or `@on_epoch` for common patterns.
+3. Run migrations:
+```bash
+python manage.py migrate
+```
 
-4. Run scheduler using Django management command:
+## Usage
+
+### 1. Define Block Processing Tasks
+Create block processing tasks in `tasks.py` or `block_tasks.py` file inside any of your installed Django apps.
+
+### 2. Use Decorators to Register Tasks
+- Use `@block_task` to create a custom block processing task
+- Use shortcuts like `@every_block`, `@every_n_blocks`, or `@on_epoch` for common patterns
+
+### 3. Sync Task Functions
+Register your tasks with the database:
 ```bash
 $ python manage.py block_dumper --sync-functions
+```
+
+### 4. Start the Block Dumper
+Run the scheduler to start processing blocks:
+```bash
+$ python manage.py block_dumper
+```
+
+### 5. Start Celery Workers
+In separate terminals, start Celery workers to execute tasks:
+```bash
+$ celery -A your_project worker --loglevel=info
 ```
 
 See examples below:
@@ -65,28 +96,42 @@ def process_on_epoch(block_number: int):
 ```
 
 
-## Configuration:
+## Configuration
 
-Required settings configs:
+### Required Django Settings
 
+Add these settings to your Django `settings.py`:
+
+```python
+# Celery Configuration
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
 # Abstract Block Dumper specific settings
+BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'mainnet'
+BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
+BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
+BLOCK_DUMPER_MAX_BLOCKS_BEHIND = 1  # max blocks to process in one cycle
+BLOCK_DUMPER_TASK_TIMEOUT = 300  # timeout in seconds for each task
+```
 
-BITTENSOR_NETWORK (str) - network to connect to, one of:
-- `finney`
-- `local`
-- `mainnet`
-Default: `'finney'`
+### Configuration Options Explained
 
-BLOCK_DUMPER_START_FROM_BLOCK (str|int|None) - starting block number, can be:
-- `None`: resume from the last processed block in the database
-- `'current'`: start from the current block number
-- `int`: start from the specified block number
-Default: `'current'`
+**BITTENSOR_NETWORK** (str) - Network to connect to:
+- `'finney'` (default): Bittensor mainnet
+- `'local'`: Local development network
+- `'mainnet'`: Alternative mainnet reference
 
-BLOCK_DUMPER_POLL_INTERVAL (int) - seconds between polling for new blocks, default is 1 second for real-time processing
-BLOCK_DUMPER_MAX_BLOCKS_BEHIND (int) - maximum number of blocks to process in one cycle, default is 1 for real-time processing
-BLOCK_DUMPER_TASK_TIMEOUT (int) - timeout in seconds for each block processing task, default is 300 seconds
+**BLOCK_DUMPER_START_FROM_BLOCK** (str|int|None) - Starting block number:
+- `None`: Resume from the last processed block in the database
+- `'current'` (default): Start from the current block number
+- `int`: Start from the specified block number
+
+**BLOCK_DUMPER_POLL_INTERVAL** (int) - Seconds between polling for new blocks (default: 1)
+
+**BLOCK_DUMPER_MAX_BLOCKS_BEHIND** (int) - Maximum number of blocks to process in one cycle (default: 1)
+
+**BLOCK_DUMPER_TASK_TIMEOUT** (int) - Timeout in seconds for each block processing task (default: 300)
 
 ## Performance Features
 
@@ -108,16 +153,29 @@ from abstract_block_dumper.utils import get_all_active_netuids
 netuids = get_all_active_netuids(cache_duration=600)  # Cache for 10 minutes
 ```
 
+## Example Project
 
-## Versioning
+The repository includes a complete working example in the `example_project/` directory that demonstrates:
 
-This package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-TL;DR you are safe to use [compatible release version specifier](https://packaging.python.org/en/latest/specifications/version-specifiers/#compatible-release) `~=MAJOR.MINOR` in your `pyproject.toml` or `requirements.txt`.
+- Django application setup with abstract-block-dumper
+- Multiple task types (`@every_block`, `@every_n_blocks` with different configurations)
+- Error handling with a randomly failing task
+- Docker Compose setup with all required services
+- Monitoring with Flower (Celery monitoring tool)
 
-Additionally, this package uses [ApiVer](https://www.youtube.com/watch?v=FgcoAKchPjk) to further reduce the risk of breaking changes.
-This means, the public API of this package is explicitly versioned, e.g. `abstract_block_dumper.v1`, and will not change in a backwards-incompatible way even when `abstract_block_dumper.v2` is released.
+### Running the Example
 
-Internal packages, i.e. prefixed by `abstract_block_dumper._` do not share these guarantees and may change in a backwards-incompatible way at any time even in patch releases.
+```bash
+cd example_project
+docker-compose up --build
+```
+
+This starts:
+- **Django application** (http://localhost:8000) - Admin interface (user: `admin`, password: `admin`)
+- **Celery workers** - Execute block processing tasks
+- **Block scheduler** - Monitors blockchain and schedules tasks
+- **Flower monitoring** (http://localhost:5555) - Monitor Celery tasks
+- **Redis & PostgreSQL** - Required services
 
 
 ## Development

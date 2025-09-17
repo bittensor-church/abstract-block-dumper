@@ -17,6 +17,9 @@ def ensure_modules_loaded():
                 __import__(f"{app_config.name}.{module_suffix}")
             except ModuleNotFoundError:
                 continue
+            except ImportError as e:
+                logger.warning(f"Failed to import {app_config.name}.{module_suffix}: {e}")
+                continue
 
 
 def sync_block_task_functions(ensure_loaded: bool = True) -> int:

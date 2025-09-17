@@ -38,6 +38,7 @@ lint = [
 ]
 release = [{ name = "towncrier" }]
 test = [
+    { name = "factory-boy" },
     { name = "freezegun" },
     { name = "pytest" },
     { name = "pytest-apiver" },

@@ -1,7 +1,3 @@
-"""
-Unit tests for caching functionality in utils module.
-"""
-
 from unittest.mock import MagicMock, patch
 
 from django.test import override_settings
@@ -15,7 +11,6 @@ from abstract_block_dumper.utils import (
 
 @override_settings(BITTENSOR_NETWORK="finney")
 def test_bittensor_client_caching():
-    """Test that bittensor client is properly cached."""
     # Clear any existing cache
     clear_caches()
 
@@ -42,7 +37,6 @@ def test_bittensor_client_caching():
 
 
 def test_netuids_time_based_caching():
-    """Test that netuids caching works with time-based expiration."""
     clear_caches()
 
     with patch("abstract_block_dumper.utils.get_bittensor_client") as mock_client_func:

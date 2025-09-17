@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: example_project/Dockerfile
-    command: sh -c "uv run python manage.py migrate && uv run python manage.py runserver 0.0.0.0:8000"
+    command: sh -c "uv run python manage.py migrate && uv run python manage.py create_admin && uv run python manage.py runserver 0.0.0.0:8000"
     volumes:
       - .:/app/example_project
       - ../src:/app/src
@@ -69,7 +69,7 @@ services:
     build:
       context: ..
       dockerfile: example_project/Dockerfile
-    command: uv run python manage.py run_block_scheduler
+    command: uv run python manage.py block_dumper --sync-functions
     volumes:
       - .:/app/example_project
       - ../src:/app/src

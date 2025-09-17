@@ -12,7 +12,7 @@ The package uses decorators to register block processing tasks. These tasks can 
 ```bash
 docker-compose up --build
 ```
-2. Access the Django admin interface at `http://localhost:8000/admin` with username `admin` and password `admin`.
+2. Access the Django admin interface at `http://localhost:8000/admin` with username `admin` and password `admin` (automatically created).
 3. Start the block dumper scheduler:
 ```bash
 docker-compose exec web python manage.py run_block_dumper

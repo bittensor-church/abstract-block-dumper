@@ -31,6 +31,7 @@ release = [
     { name = "towncrier" },
 ]
 test = [
+    { name = "factory-boy" },
     { name = "freezegun" },
     { name = "pytest" },
     { name = "pytest-apiver" },
@@ -44,7 +45,7 @@ requires-dist = [
     { name = "bittensor", specifier = ">=9.10.1" },
     { name = "celery", extras = ["redis"], specifier = ">=5.5.3" },
     { name = "cloudpickle", specifier = ">=3.1.1" },
-    { name = "django", specifier = ">=4.2,<6.0" },
+    { name = "django", specifier = ">=3.2,<6.0" },
     { name = "structlog", specifier = ">=25.4.0" },
 ]
 
@@ -64,6 +65,7 @@ lint = [
 ]
 release = [{ name = "towncrier" }]
 test = [
+    { name = "factory-boy" },
     { name = "freezegun" },
     { name = "pytest" },
     { name = "pytest-apiver" },
@@ -609,6 +611,30 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/bb/ff/b4c0dc78fbe20c3e59c0c7334de0c27eb4001a2b2017999af398bf730817/execnet-2.1.1.tar.gz", hash = "sha256:5189b52c6121c24feae288166ab41b32549c7e2348652736540b9e6e7d4e72e3", size = 166524, upload-time = "2024-04-08T09:04:19.245Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/43/09/2aea36ff60d16dd8879bdb2f5b3ee0ba8d08cbbdcdfe870e695ce3784385/execnet-2.1.1-py3-none-any.whl", hash = "sha256:26dee51f1b80cebd6d0ca8e74dd8745419761d3bef34163928cbebbdc4749fdc", size = 40612, upload-time = "2024-04-08T09:04:17.414Z" },
+]
+
+[[package]]
+name = "factory-boy"
+version = "3.3.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "faker" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ba/98/75cacae9945f67cfe323829fc2ac451f64517a8a330b572a06a323997065/factory_boy-3.3.3.tar.gz", hash = "sha256:866862d226128dfac7f2b4160287e899daf54f2612778327dd03d0e2cb1e3d03", size = 164146, upload-time = "2025-02-03T09:49:04.433Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/8d/2bc5f5546ff2ccb3f7de06742853483ab75bf74f36a92254702f8baecc79/factory_boy-3.3.3-py2.py3-none-any.whl", hash = "sha256:1c39e3289f7e667c4285433f305f8d506efc2fe9c73aaea4151ebd5cdea394fc", size = 37036, upload-time = "2025-02-03T09:49:01.659Z" },
+]
+
+[[package]]
+name = "faker"
+version = "37.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "tzdata" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/da/1336008d39e5d4076dddb4e0f3a52ada41429274bf558a3cc28030d324a3/faker-37.8.0.tar.gz", hash = "sha256:090bb5abbec2b30949a95ce1ba6b20d1d0ed222883d63483a0d4be4a970d6fb8", size = 1912113, upload-time = "2025-09-15T20:24:13.592Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/11/02ebebb09ff2104b690457cb7bc6ed700c9e0ce88cf581486bb0a5d3c88b/faker-37.8.0-py3-none-any.whl", hash = "sha256:b08233118824423b5fc239f7dd51f145e7018082b4164f8da6a9994e1f1ae793", size = 1953940, upload-time = "2025-09-15T20:24:11.482Z" },
 ]
 
 [[package]]

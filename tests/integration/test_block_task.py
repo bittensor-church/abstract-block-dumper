@@ -58,7 +58,6 @@ def setup_test_tasks():
 
 @pytest.mark.django_db
 def test_task_registration_workflow(setup_test_tasks):
-    """Test that tasks are properly registered via decorators."""
     # Verify tasks are in registry
     assert len(BlockDumperRegistry._pending_registrations) == 2
 
@@ -83,8 +82,6 @@ def test_task_registration_workflow(setup_test_tasks):
 @pytest.mark.django_db
 @patch("abstract_block_dumper.scheduler.get_bittensor_client")
 def test_block_scheduling_workflow(mock_get_client, setup_test_tasks):
-    """Test the complete block scheduling workflow."""
-    # Setup mocks
     mock_subtensor = MagicMock()
     mock_subtensor.get_current_block.return_value = 100
     mock_get_client.return_value = mock_subtensor
@@ -105,7 +102,7 @@ def test_block_scheduling_workflow(mock_get_client, setup_test_tasks):
     tasks = ScheduledTask.objects.filter(block_number=100)
 
     # Should have 1 task for every_block + 2 tasks for modulo task (netuids 1,2)
-    # Modulo condition: 100 % 5 == 0, so it should execute
+    # Modulo condition: 100 % 5 == 0 -> should execute
     assert tasks.count() == 3
 
     # Verify every_block task
@@ -125,7 +122,6 @@ def test_block_scheduling_workflow(mock_get_client, setup_test_tasks):
 @patch("abstract_block_dumper.tasks.execute_block_task.apply_async")
 @patch("abstract_block_dumper.scheduler.get_bittensor_client")
 def test_celery_task_scheduling(mock_get_client, mock_apply_async, setup_test_tasks):
-    """Test that Celery tasks are properly scheduled."""
     # Setup mocks
     mock_subtensor = MagicMock()
     mock_get_client.return_value = mock_subtensor
@@ -155,7 +151,6 @@ def test_celery_task_scheduling(mock_get_client, mock_apply_async, setup_test_ta
 
 @pytest.mark.django_db
 def test_task_execution_success(setup_test_tasks):
-    """Test successful task execution."""
     # Register tasks
     sync_block_task_functions()
     config = BlockDumperConfig.objects.get(name="test_every_block")
@@ -196,7 +191,6 @@ def test_task_execution_success(setup_test_tasks):
 @pytest.mark.django_db
 @patch("abstract_block_dumper.tasks.execute_block_task.apply_async")
 def test_task_execution_failure_and_retry(mock_apply_async, setup_test_tasks):
-    """Test task execution failure and retry mechanism."""
     # Create a task that will fail using the module-level function
     block_task(name="failing_task", max_retries=2)(failing_task_func)
 
@@ -242,7 +236,6 @@ def test_task_execution_failure_and_retry(mock_apply_async, setup_test_tasks):
 
 @pytest.mark.django_db
 def test_condition_evaluation(setup_test_tasks):
-    """Test different condition types are evaluated correctly."""
     # Register tasks
     sync_block_task_functions()
 
@@ -263,7 +256,6 @@ def test_condition_evaluation(setup_test_tasks):
 
 @pytest.mark.django_db
 def test_netuid_handling(setup_test_tasks):
-    """Test that netuid handling works correctly."""
     # Register tasks
     sync_block_task_functions()
 
@@ -280,7 +272,6 @@ def test_netuid_handling(setup_test_tasks):
 @pytest.mark.django_db
 @patch("abstract_block_dumper.scheduler.get_bittensor_client")
 def test_end_to_end_workflow(mock_get_client, setup_test_tasks):
-    """Test the complete end-to-end workflow."""
     # Setup mocks
     mock_subtensor = MagicMock()
     mock_subtensor.get_current_block.return_value = 105

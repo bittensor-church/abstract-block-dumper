@@ -79,5 +79,5 @@ def on_epoch(
         condition=condition_map,
         tempo=300,
         netuid_offset=True,
-        netuid_values=netuids,
+        netuid=netuids,
     )
