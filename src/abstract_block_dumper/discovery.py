@@ -1,3 +1,8 @@
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
 def ensure_modules_loaded():
     """
     Ensure common tasks modules are imported to trigger @block_task registration.

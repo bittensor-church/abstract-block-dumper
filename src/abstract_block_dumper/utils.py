@@ -1,6 +1,7 @@
 import time
 from collections.abc import Callable
 from functools import cache, lru_cache
+from typing import Any
 
 import bittensor as bt
 import structlog
@@ -65,7 +66,7 @@ def clear_caches() -> None:
     logger.info("Cleared all bittensor client and netuids caches")
 
 
-def load_function_from_path(function_path: str) -> Callable:
+def load_function_from_path(function_path: str) -> Callable[..., Any]:
     """
     Load a function from a module path.
     """

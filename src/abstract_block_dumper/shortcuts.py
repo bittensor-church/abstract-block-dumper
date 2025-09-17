@@ -79,5 +79,5 @@ def on_epoch(
         condition=condition_map,
         tempo=300,
         netuid_offset=True,
-        netuid_values=",".join(map(str, netuids)) if netuids else "",
+        netuid_values=netuids,
     )

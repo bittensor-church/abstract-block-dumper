@@ -7,14 +7,20 @@ These tests verify the complete workflow of the block dumper:
 3. Task execution via Celery
 4. Statistics tracking and model updates
 """
+
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from abstract_block_dumper.decorators import BlockDumperRegistry, block_task
 from abstract_block_dumper.discovery import sync_block_task_functions
-from abstract_block_dumper.models import (BlockDumperConfig,
-                                          BlockDumperExecution, ConditionType,
-                                          NetuidType, ScheduledTask)
+from abstract_block_dumper.models import (
+    BlockDumperConfig,
+    BlockDumperExecution,
+    ConditionType,
+    NetuidType,
+    ScheduledTask,
+)
 from abstract_block_dumper.scheduler import BlockScheduler
 from abstract_block_dumper.tasks import execute_block_task
 
