@@ -21,6 +21,11 @@ dynamic = [
     "version",
 ]
 dependencies = [
+    "bittensor>=9.10.1",
+    "celery[redis]>=5.5.3",
+    "cloudpickle>=3.1.1",
+    "django>=4.2,<6.0",
+    "structlog>=25.4.0",
 ]
 
 [project.urls]
@@ -60,6 +65,9 @@ lint = [
 release = [
     "towncrier",
 ]
+dev = [
+    "ruff>=0.13.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]  # allow for `import tests` in test files
@@ -73,10 +81,10 @@ line-length = 120
 select = [
     "D",
     "E", "F", "I", "UP",
-    "TCH005",
+    "TC005",
 ]
 ignore = [
-    "D100", "D105", "D107", "D200", "D202", "D203", "D205", "D212", "D400", "D401", "D415",
+    "D100", "D105", "D106", "D107", "D200", "D202", "D203", "D205", "D212", "D400", "D401", "D415",
     "D101", "D102", "D103", "D104", # TODO remove once we have docstring for all public methods
 ]
 
