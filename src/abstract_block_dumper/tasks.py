@@ -37,7 +37,7 @@ def execute_block_task(self, task_id: int) -> None:
 
     try:
         func = load_function_from_path(task.config.function_path)
-        if not func:
+        if func is None:
             raise ImportError(f"Could not load function from path: {task.config.function_path}")
 
         if task.netuid is not None:

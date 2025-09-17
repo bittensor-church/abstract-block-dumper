@@ -26,8 +26,9 @@ def sync_block_task_functions(ensure_loaded: bool = True) -> int:
 
     sync_count = 0
     registrations = BlockDumperRegistry.get_pending_registrations()
-    for config_data, _ in registrations:
+    for config_data in registrations:
         BlockDumperConfig.objects.get_or_create(name=config_data["name"], defaults=config_data)
         sync_count += 1
+
     BlockDumperRegistry.clear_pendings()
     return sync_count

@@ -141,9 +141,20 @@ name = "Infrastructure"
 showcontent = true
 
 [tool.mypy]
+plugins = ["mypy_django_plugin.main"]
+strict_optional = true
+
+[tool.django-stubs]
+django_settings_module = "tests.settings"
 
 [[tool.mypy.overrides]]
 module = [
+    "bittensor",
+    "bittensor.*",
+    "celery",
+    "celery.*",
+    "cloudpickle",
+    "cloudpickle.*",
     "nox",
     "pytest",
     "tests.*",

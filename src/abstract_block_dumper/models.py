@@ -94,7 +94,7 @@ class BlockDumperConfig(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.name} ({self.get_condition_type_display()})"  # type: ignore (TODO: install django-stubs)
+        return f"{self.name} ({self.get_condition_type_display()})"
 
     def should_execute_at_block(
         self,

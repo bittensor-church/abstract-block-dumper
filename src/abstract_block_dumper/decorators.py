@@ -15,19 +15,14 @@ class BlockDumperRegistry:
     Register all decorated functions.
     """
 
-    _functions = {}
-    _pending_registrations = []
+    _pending_registrations: list[BlockDumperRequestSchema] = []
 
     @classmethod
-    def register(cls, config_data: BlockDumperRequestSchema, func: Callable) -> None:
-        cls._functions[config_data["name"]] = {
-            "function": func,
-            "config": config_data,
-        }
-        cls._pending_registrations.append((config_data, func))
+    def register(cls, config_data: BlockDumperRequestSchema) -> None:
+        cls._pending_registrations.append(config_data)
 
     @classmethod
-    def get_pending_registrations(cls) -> list[tuple[dict, Callable]]:
+    def get_pending_registrations(cls) -> list[BlockDumperRequestSchema]:
         return cls._pending_registrations
 
     @classmethod
@@ -72,7 +67,7 @@ def block_task(
             "timeout": timeout,
         }
 
-        BlockDumperRegistry.register(config_data, func)
+        BlockDumperRegistry.register(config_data)
 
         @wraps(func)
         def wrapper(*args, **kwargs) -> Any:
