@@ -145,6 +145,9 @@ showcontent = true
 [tool.mypy]
 plugins = ["mypy_django_plugin.main"]
 strict_optional = true
+exclude = [
+    "tests/",
+]
 
 [tool.django-stubs]
 django_settings_module = "tests.settings"

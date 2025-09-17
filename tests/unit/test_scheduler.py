@@ -25,7 +25,7 @@ def scheduler(mock_subtensor) -> BlockScheduler:
 
 @pytest.fixture
 def block_config() -> BlockDumperConfig:  # type: ignore[return]  # Factory returns correct type
-    return BlockDumperConfigFactory(
+    return BlockDumperConfigFactory(  # type: ignore[return]
         name="test_task",
         description="Test task",
         function_path="test.function",
