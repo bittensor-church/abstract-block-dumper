@@ -4,6 +4,37 @@
 This package provides a framework for creating and managing block processing tasks in a Django application.
 It allows developers to define tasks that process blockchain blocks using decorators and run them asynchronously using Celery.
 
+## Implementation Details
+
+### General Workflow:
+Register functions -> detect new blocks -> schedule tasks -> send to Celery -> execute -> track results -> recover from errors.
+
+
+### WorkflowSteps
+1. Register
+- Functions registered by running block_dumper --sync-functions
+- Functions must be located in installed apps in tasks.py or block_tasks.py (discovery.py)
+- Functions marked with decorators are saved with their rules in the database.
+
+2. Detect Blocks
+- Scheduler is running by management command block_dumper
+- Scheduler polls blockchain, finds new blocks, and batches them.
+
+3. Plan Tasks
+- For each block, configs are checked (every block, modulo, epoch).
+- Tasks are created by scheduler.py (one or many, depending on netuids).
+
+4. Queue
+Tasks are sent to Celery (execute_block_task task) with queue and timeout settings.
+
+5. Execute
+Celery runs the function with block info, capturing results and errors.
+
+6. Track
+Task states update (PENDING → RUNNING → SUCCESS/FAILED).
+Stats and retries handled automatically.
+
+
 ## Prerequisites
 - Django
 - Celery
