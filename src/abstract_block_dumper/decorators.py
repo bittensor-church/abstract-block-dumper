@@ -9,6 +9,12 @@ from abstract_block_dumper.schemas import BlockDumperRequestSchema
 
 from .models import DEFAULT_MAX_RETRIES, DEFAULT_QUEUE, DEFAULT_RETRY_BACKOFF, ConditionType, NetuidType
 
+EPOCH_CONDITIONS = {
+    ConditionType.EPOCH_START,
+    ConditionType.EPOCH_MIDDLE,
+    ConditionType.EPOCH_END,
+}
+
 
 class BlockDumperRegistry:
     """
@@ -46,17 +52,22 @@ def block_task(
     """
 
     def decorator(func: Callable) -> Callable:
-        # validate signature
-        _validate_function_signature(func)
-
         executable_path = ".".join([func.__module__, func.__name__])
         config_name = name or executable_path
+
+        condition_type = _determine_condition_type(condition)
+
+        # validate signature (needs condition_type for epoch validation)
+        _validate_function_signature(func, condition_type)
+
+        # validate epoch condition requirements
+        _validate_epoch_netuid_requirement(condition_type, netuid)
 
         config_data: BlockDumperRequestSchema = {
             "name": config_name,
             "description": description,
             "function_path": executable_path,
-            "condition_type": _determine_condition_type(condition),
+            "condition_type": condition_type,
             "condition_params": _build_condition_params(condition, condition_kwargs),
             "netuid_type": _determine_netuid_type(netuid),
             "netuid_values": _build_netuid_values(netuid),
@@ -79,7 +90,7 @@ def block_task(
     return decorator
 
 
-def _validate_function_signature(func) -> None:
+def _validate_function_signature(func, condition_type: ConditionType | None = None) -> None:
     signature = inspect.signature(func)
     params = list(signature.parameters.keys())
 
@@ -90,10 +101,24 @@ def _validate_function_signature(func) -> None:
     if block_number.annotation not in (int, inspect.Parameter.empty):
         raise ValueError("block_number parameter should be annotated as int")
 
+    # For epoch conditions, netuid parameter is required
+    if condition_type and condition_type in EPOCH_CONDITIONS:
+        if "netuid" not in params:
+            raise ValueError(f"Function {func.__name__} with epoch condition must have 'netuid' parameter.")
+
     if "netuid" in params:
         netuid_parameter = signature.parameters["netuid"]
         if netuid_parameter.default is inspect.Parameter.empty:
             raise ValueError("netuid parameter should have default value of None")
+
+
+def _validate_epoch_netuid_requirement(condition: ConditionType, netuid: int | list[int] | str | None) -> None:
+    """
+    Validate that epoch-based conditions have specific netuid(s) defined.
+    """
+    if condition in EPOCH_CONDITIONS:
+        if netuid is None or (isinstance(netuid, list) and len(netuid) == 0):
+            raise ValueError(f"Epoch-based condition '{condition}' requires netuid(s) to be specified.")
 
 
 def _determine_condition_type(condition: Callable | ConditionType) -> ConditionType:
@@ -112,7 +137,7 @@ def _build_condition_params(condition: Callable | ConditionType, condition_kwarg
             if "modulo" not in params:
                 raise ValueError("'modulo' condition requires 'modulo' parameter")
         elif condition in [ConditionType.EPOCH_START, ConditionType.EPOCH_MIDDLE, ConditionType.EPOCH_END]:
-            params.setdefault("tempo", 360)
+            params.setdefault("netuid_offset", True)
     elif callable(condition):
         params["function_bytes"] = cloudpickle.dumps(condition)
     return params

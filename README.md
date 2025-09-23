@@ -99,9 +99,8 @@ from abstract_block_dumper.decorators import block_task
 @block_task(
     name="example_dumper",
     description="An example block dumper",
-
 )
-def block_task(block_number: int):
+def block_task_function(block_number: int):
     # Your block processing logic here
     print(f"Processing block {block_number}")
 ```
@@ -109,7 +108,9 @@ def block_task(block_number: int):
 Shortcuts are available to register the task directly:
 
 ```python
+from abstract_block_dumper.models import ConditionType
 from abstract_block_dumper.shortcuts import every_block, every_n_blocks, on_epoch
+
 
 @every_block
 def process_every_block(block_number: int):
@@ -120,10 +121,11 @@ def process_every_10_blocks(block_number: int):
     print(f"Processing every 10 blocks: {block_number}")
 
 @on_epoch(
-    position=EpochPosition.START,
+    condition=ConditionType.EPOCH_START,
+    netuids=[1],
 )
-def process_on_epoch(block_number: int):
-    print(f"Processing on epoch: {block_number}")
+def process_on_epoch(block_number: int, netuid: int):
+    print(f"Processing on epoch: {block_number} for netuid: {netuid}")
 ```
 
 

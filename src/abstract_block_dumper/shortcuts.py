@@ -1,7 +1,8 @@
 from collections.abc import Callable
+from typing import Literal
 
 from abstract_block_dumper.decorators import block_task
-from abstract_block_dumper.models import ConditionType, EpochPosition
+from abstract_block_dumper.models import ConditionType
 
 
 def every_block(name: str | None = None, **kwargs) -> Callable:
@@ -47,9 +48,9 @@ def every_n_blocks(name: str | None = None, n: int = 120, offset: int = 0, **kwa
 
 
 def on_epoch(
+    condition: Literal[ConditionType.EPOCH_START, ConditionType.EPOCH_END, ConditionType.EPOCH_MIDDLE],
+    netuids: list[int] | int,
     name: str | None = None,
-    position: EpochPosition = EpochPosition.START,
-    netuids: list[int] | None = None,
 ) -> Callable:
     """
     Shortcut for block dumper that runs on epoch boundaries.
@@ -57,27 +58,21 @@ def on_epoch(
     Example:
     ```python
 
-    @on_epoch(name="my_epoch_dumper", position=EpochPosition.START, netuids=[1, 2])
+    @on_epoch(name="my_epoch_dumper", condition=ConditionType.EPOCH_START, netuids=[1, 2])
     def my_dumper(block_number: int):
         pass
     ```
 
+    :param netuids: List of netuids to apply the epoch condition to. Required.
     :param name: Optional name for the block dumper task.
-    :param position: Position within the epoch to trigger the dumper (START, MIDDLE, END).
-    :param netuids: List of netuids to apply the dumper to. If None, applies to all netuids.
+    :param condition: The epoch boundary condition to trigger on.
     :return: Decorator for the block dumper function.
 
     """
-    condition_map = {
-        EpochPosition.START: ConditionType.EPOCH_START,
-        EpochPosition.MIDDLE: ConditionType.EPOCH_MIDDLE,
-        EpochPosition.END: ConditionType.EPOCH_END,
-    }.get(position, ConditionType.EPOCH_START)
 
     return block_task(
         name=name,
-        condition=condition_map,
-        tempo=300,
-        netuid_offset=True,
+        condition=condition,
         netuid=netuids,
+        netuid_offset=True,
     )

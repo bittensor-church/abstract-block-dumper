@@ -166,3 +166,47 @@ def test_block_task_preserves_metadata():
     assert hasattr(documented_func, "_block_dumper_config")
     config = getattr(documented_func, "_block_dumper_config")
     assert config["name"] == "preserve_test"
+
+
+def test_epoch_condition_rejects_empty_netuids():
+    """Test that epoch conditions reject empty netuid lists."""
+
+    with pytest.raises(ValueError, match="requires netuid\\(s\\) to be specified"):
+
+        @block_task(condition=ConditionType.EPOCH_START, netuid=[])
+        def invalid_epoch_func(block_number: int, netuid: int | None = None):
+            pass
+
+
+def test_epoch_condition_rejects_none_netuids():
+    """Test that epoch conditions reject None netuids."""
+
+    with pytest.raises(ValueError, match="requires netuid\\(s\\) to be specified"):
+
+        @block_task(condition=ConditionType.EPOCH_START, netuid=None)
+        def invalid_epoch_func(block_number: int, netuid: int | None = None):
+            pass
+
+
+def test_epoch_condition_accepts_valid_netuids():
+    """Test that epoch conditions accept valid netuids."""
+
+    # Should not raise an exception
+    @block_task(condition=ConditionType.EPOCH_START, netuid=[1, 22])
+    def valid_epoch_func(block_number: int, netuid: int | None = None):
+        pass
+
+    # Should not raise an exception
+    @block_task(condition=ConditionType.EPOCH_START, netuid=1)
+    def valid_single_netuid_func(block_number: int, netuid: int | None = None):
+        pass
+
+
+def test_epoch_condition_requires_netuid_parameter():
+    """Test that epoch conditions require netuid parameter in function signature."""
+
+    with pytest.raises(ValueError, match="with epoch condition must have 'netuid' parameter"):
+
+        @block_task(condition=ConditionType.EPOCH_START, netuid=[1, 22])
+        def invalid_no_netuid_func(block_number: int):
+            pass

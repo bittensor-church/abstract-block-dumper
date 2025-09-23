@@ -4,7 +4,7 @@ from typing import Any
 
 import cloudpickle
 
-from abstract_block_dumper.models import ConditionType, EpochPosition
+from abstract_block_dumper.models import ConditionType
 
 
 class BlockCondition(ABC):
@@ -52,29 +52,49 @@ class EpochBoundaryCondition(BlockCondition):
     Condition to trigger on epoch boundaries: start, middle, or end.
     """
 
-    def __init__(self, tempo: int, position: EpochPosition, netuid_offset: bool = True):
+    def __init__(self, position: ConditionType, tempo: int | None = None, netuid_offset: bool = True):
         self.tempo = tempo
         self.position = position
         self.netuid_offset = netuid_offset
 
     def should_execute(self, block_number: int, netuid: int | None = None) -> bool:
-        from abstract_block_dumper.models import EpochPosition
+        if netuid is None:
+            raise ValueError("netuid must be provided for EpochBoundaryCondition")
 
-        # Assuming tempo represents epoch length for simplicity
-        if self.netuid_offset and netuid is not None:
-            adjusted_block = block_number + netuid + 2
+        tempo = self.get_tempo(netuid)
+
+        if self.netuid_offset:
+            BITTENSOR_BUG_OFFSET = 1  # Adjust for known bittensor bug
+            BLOCK_INDEX_OFFSET = 1  # Offset to align with epoch start
+            block_index = (block_number + netuid + BLOCK_INDEX_OFFSET + BITTENSOR_BUG_OFFSET) % tempo
         else:
-            adjusted_block = block_number
+            block_index = block_number % tempo
 
-        block_in_epoch = adjusted_block % self.tempo
+        if self.position == ConditionType.EPOCH_START:
+            return block_index == 0
 
-        if self.position == EpochPosition.START:
-            return block_in_epoch == 0
-        elif self.position == EpochPosition.MIDDLE:
-            return block_in_epoch == self.tempo // 2
-        elif self.position == EpochPosition.END:
-            return block_in_epoch == self.tempo - 1
+        elif self.position == ConditionType.EPOCH_MIDDLE:
+            if tempo % 2 != 0:
+                return False
+            return block_index == (tempo // 2)
+
+        elif self.position == ConditionType.EPOCH_END:
+            return block_index == (tempo - 1)
+
         return False
+
+    def get_tempo(self, netuid: int) -> int:
+        tempo = {
+            # Handle known netuids with specific tempos
+            0: 100,
+            1: 99,
+        }.get(netuid, 360)  # Default tempo
+        return self.get_epoch_duration(tempo)
+
+    @staticmethod
+    def get_epoch_duration(tempo: int) -> int:
+        # Because of bittensor bug epoch is really one block longer than tempo
+        return tempo + 1
 
 
 class CustomCondition(BlockCondition):
@@ -112,16 +132,9 @@ def get_condition_instance(condition_type: ConditionType, params: dict[str, Any]
         )
 
     elif condition_type in [ConditionType.EPOCH_START, ConditionType.EPOCH_MIDDLE, ConditionType.EPOCH_END]:
-        # map conditiontype with epoch position
-        epoch_position = {
-            ConditionType.EPOCH_START: EpochPosition.START,
-            ConditionType.EPOCH_MIDDLE: EpochPosition.MIDDLE,
-            ConditionType.EPOCH_END: EpochPosition.END,
-        }.get(condition_type, EpochPosition.START)
-
         return EpochBoundaryCondition(
             tempo=params["tempo"],
-            position=epoch_position,
+            position=condition_type,
             netuid_offset=params.get("netuid_offset", True),
         )
 

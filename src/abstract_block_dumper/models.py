@@ -23,12 +23,6 @@ class ConditionType(models.TextChoices):
     EPOCH_END = "epoch_end", "Epoch End"
 
 
-class EpochPosition(models.TextChoices):
-    START = "start", "Start of Epoch"
-    MIDDLE = "middle", "Middle of Epoch"
-    END = "end", "End of Epoch"
-
-
 class NetuidType(models.TextChoices):
     NONE = "none", "No Netuid"
     ALL = "all", "All Netuids"
@@ -119,14 +113,12 @@ class BlockDumperConfig(models.Model):
 
         :return: List of netuids or [None] if no netuid is applicable.
         """
-        if self.netuid_type == NetuidType.NONE:
-            return [None]
-        elif self.netuid_type == NetuidType.ALL:
+        if self.netuid_type == NetuidType.ALL:
             return get_all_active_netuids()
         elif self.netuid_type in {NetuidType.SINGLE, NetuidType.MULTIPLE}:
             return self.netuid_values
-        else:
-            return [None]
+        # Return None by default and for NetuidType.NONE
+        return [None]
 
     def update_stats(self, success: bool) -> None:
         self.total_executions += 1

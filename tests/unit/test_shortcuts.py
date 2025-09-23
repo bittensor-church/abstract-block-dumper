@@ -6,7 +6,7 @@ from typing import Any, Literal
 import pytest
 
 from abstract_block_dumper.decorators import BlockDumperRegistry
-from abstract_block_dumper.models import ConditionType, EpochPosition
+from abstract_block_dumper.models import ConditionType
 from abstract_block_dumper.shortcuts import every_block, every_n_blocks, on_epoch
 
 
@@ -89,37 +89,43 @@ def test_every_n_blocks_with_extra_kwargs() -> None:
 
 
 @pytest.mark.parametrize(
-    "position,expected_condition",
+    "condition,expected_condition",
     [
-        (EpochPosition.START, ConditionType.EPOCH_START),
-        (EpochPosition.MIDDLE, ConditionType.EPOCH_MIDDLE),
-        (EpochPosition.END, ConditionType.EPOCH_END),
+        (ConditionType.EPOCH_START, ConditionType.EPOCH_START),
+        (ConditionType.EPOCH_MIDDLE, ConditionType.EPOCH_MIDDLE),
+        (ConditionType.EPOCH_END, ConditionType.EPOCH_END),
     ],
 )
-def test_on_epoch_positions(position, expected_condition) -> None:
-    @on_epoch(name="test_epoch", position=position)
-    def test_func(block_number: int) -> Literal["processed"]:
+def test_on_epoch_positions(condition, expected_condition) -> None:
+    @on_epoch(condition=condition, netuids=[1, 22], name="test_epoch")
+    def test_func(block_number: int, netuid: int | None = None) -> Literal["processed"]:
         return "processed"
 
     config = BlockDumperRegistry.get_pending_registrations()[0]
     assert config["name"] == "test_epoch"
     assert config["condition_type"] == expected_condition
-    assert config["netuid_values"] == []
+    assert config["netuid_values"] == [1, 22]
 
-    # default tempo and netuid_offset
-    assert config["condition_params"]["tempo"] == 300
+    # default netuid_offset
     assert config["condition_params"]["netuid_offset"] is True
 
 
 def test_on_epoch_with_netuids() -> None:
-    """Test on_epoch shortcut with netuids."""
-
-    @on_epoch(name="test_with_netuids", netuids=[1, 2, 3])
+    @on_epoch(condition=ConditionType.EPOCH_START, netuids=[1, 2, 3], name="test_with_netuids")
     def test_func(block_number: int, netuid: int | None = None) -> str:
         return f"processed {block_number} for {netuid}"
 
     config = BlockDumperRegistry.get_pending_registrations()[0]
     assert config["netuid_values"] == [1, 2, 3]
+
+
+def test_on_epoch_with_single_netuid() -> None:
+    @on_epoch(condition=ConditionType.EPOCH_START, netuids=22, name="test_with_single_netuid")
+    def test_with_single_netuid(block_number: int, netuid: int | None = None) -> str:
+        return f"processed {block_number} for {netuid}"
+
+    config = BlockDumperRegistry.get_pending_registrations()[0]
+    assert config["netuid_values"] == [22]
 
 
 def test_shortcut_invalid_function_signature():
@@ -129,3 +135,33 @@ def test_shortcut_invalid_function_signature():
         @every_block(name="invalid")
         def invalid_func(some_param: int) -> Literal["invalid"]:
             return "invalid"
+
+
+def test_on_epoch_rejects_empty_netuids():
+    """Test that on_epoch rejects empty netuid lists."""
+
+    with pytest.raises(ValueError, match="requires netuid\\(s\\) to be specified"):
+
+        @on_epoch(condition=ConditionType.EPOCH_START, netuids=[], name="test_empty")
+        def test_func(block_number: int, netuid: int | None = None) -> Literal["processed"]:
+            return "processed"
+
+
+def test_on_epoch_requires_netuid_parameter():
+    """Test that on_epoch requires netuid parameter in function signature."""
+
+    with pytest.raises(ValueError, match="with epoch condition must have 'netuid' parameter"):
+
+        @on_epoch(condition=ConditionType.EPOCH_START, netuids=[1, 22], name="test_missing_netuid")
+        def test_func(block_number: int) -> Literal["processed"]:
+            return "processed"
+
+
+def test_on_epoch_requires_netuid_default_value():
+    """Test that on_epoch requires netuid parameter to have default value."""
+
+    with pytest.raises(ValueError, match="netuid parameter should have default value of None"):
+
+        @on_epoch(condition=ConditionType.EPOCH_START, netuids=[1, 22], name="test_no_default")
+        def test_func(block_number: int, netuid: int) -> Literal["processed"]:
+            return "processed"
