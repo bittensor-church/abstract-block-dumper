@@ -3,7 +3,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-def ensure_modules_loaded():
+def ensure_modules_loaded() -> None:
     """
     Ensure common tasks modules are imported to trigger @block_task registration.
 
@@ -20,23 +20,3 @@ def ensure_modules_loaded():
             except ImportError as e:
                 logger.warning(f"Failed to import {app_config.name}.{module_suffix}: {e}")
                 continue
-
-
-def sync_block_task_functions(ensure_loaded: bool = True) -> int:
-    """
-    Sync all registered block dumper functions with the database.
-    """
-    if ensure_loaded:
-        ensure_modules_loaded()
-
-    from .decorators import BlockDumperRegistry
-    from .models import BlockDumperConfig
-
-    sync_count = 0
-    registrations = BlockDumperRegistry.get_pending_registrations()
-    for config_data in registrations:
-        BlockDumperConfig.objects.get_or_create(name=config_data["name"], defaults=config_data)
-        sync_count += 1
-
-    BlockDumperRegistry.clear_pendings()
-    return sync_count

@@ -30,7 +30,7 @@ CELERY_TASK_EAGER_PROPAGATES = True
 # ----------------------------------
 BITTENSOR_NETWORK = "finney"  # or 'local', 'mainnet',
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds - ultra-fast polling for real-time processing
-BLOCK_DUMPER_MAX_BLOCKS_BEHIND = 1  # process only 1 block per cycle - no jumps, real-time only
-BLOCK_DUMPER_TASK_TIMEOUT = 300  # seconds
 BLOCK_DUMPER_START_FROM_BLOCK = "current"  # None = resume from DB, 'current' = current block, or block number
+BLOCK_TASK_RETRY_BACKOFF = 2
+BLOCK_DUMPER_MAX_ATTEMPTS = 3
 # -----------------------------------

@@ -29,8 +29,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "abstract_block_dumper",
     "block_explorer",
+
+    "abstract_block_dumper",
 ]
 
 MIDDLEWARE = [
@@ -130,6 +131,6 @@ if "test" in sys.argv or "pytest" in sys.modules:
 # Abstract Block Dumper specific settings
 BITTENSOR_NETWORK = "finney"  # or 'local', 'mainnet',
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds - ultra-fast polling for real-time processing
-BLOCK_DUMPER_MAX_BLOCKS_BEHIND = 1  # process only 1 block per cycle - no jumps, real-time only
-BLOCK_DUMPER_TASK_TIMEOUT = 300  # seconds
 BLOCK_DUMPER_START_FROM_BLOCK = "current"  # None = resume from DB, 'current' = current block, or block number
+BLOCK_TASK_RETRY_BACKOFF = 2
+BLOCK_DUMPER_MAX_ATTEMPTS = 3

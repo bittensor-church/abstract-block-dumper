@@ -69,7 +69,7 @@ services:
     build:
       context: ..
       dockerfile: example_project/Dockerfile
-    command: uv run python manage.py block_dumper --sync-functions
+    command: uv run python manage.py block_tasks
     volumes:
       - .:/app/example_project
       - ../src:/app/src
