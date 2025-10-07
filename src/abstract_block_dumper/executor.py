@@ -139,7 +139,10 @@ class CeleryExecutor:
             )
             return
 
-        celery_kwargs = {**registry_item.celery_kwargs, "args": [block_number, args, registry_item.executable_path]}
+        celery_kwargs = {
+            **(registry_item.celery_kwargs or {}),
+            "args": [block_number, args, registry_item.executable_path],
+        }
 
         if task_attempt.next_retry_at:
             celery_kwargs["eta"] = task_attempt.next_retry_at
