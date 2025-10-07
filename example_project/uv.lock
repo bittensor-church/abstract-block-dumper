@@ -8,7 +8,6 @@ source = { editable = "../" }
 dependencies = [
     { name = "bittensor" },
     { name = "celery" },
-    { name = "cloudpickle" },
     { name = "django" },
     { name = "structlog" },
 ]
@@ -17,7 +16,6 @@ dependencies = [
 requires-dist = [
     { name = "bittensor", specifier = ">=9.10.1" },
     { name = "celery", specifier = ">=5.5.3" },
-    { name = "cloudpickle", specifier = ">=3.1.1" },
     { name = "django", specifier = ">=3.2,<6.0" },
     { name = "structlog", specifier = ">=25.4.0" },
 ]
@@ -41,7 +39,6 @@ test = [
     { name = "factory-boy" },
     { name = "freezegun" },
     { name = "pytest" },
-    { name = "pytest-apiver" },
     { name = "pytest-asyncio" },
     { name = "pytest-django" },
     { name = "pytest-xdist" },
@@ -492,15 +489,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cb/a2/57f4ac79838cfae6912f997b4d1a64a858fb0c86d7fcaae6f7b58d267fca/click-repl-0.3.0.tar.gz", hash = "sha256:17849c23dba3d667247dc4defe1757fff98694e90fe37474f3feebb69ced26a9", size = 10449, upload-time = "2023-06-15T12:43:51.141Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/52/40/9d857001228658f0d59e97ebd4c346fe73e138c6de1bce61dc568a57c7f8/click_repl-0.3.0-py3-none-any.whl", hash = "sha256:fb7e06deb8da8de86180a33a9da97ac316751c094c6899382da7feeeeb51b812", size = 10289, upload-time = "2023-06-15T12:43:48.626Z" },
-]
-
-[[package]]
-name = "cloudpickle"
-version = "3.1.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/52/39/069100b84d7418bc358d81669d5748efb14b9cceacd2f9c75f550424132f/cloudpickle-3.1.1.tar.gz", hash = "sha256:b216fa8ae4019d5482a8ac3c95d8f6346115d8835911fd4aefd1a445e4242c64", size = 22113, upload-time = "2025-01-14T17:02:05.085Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/e8/64c37fadfc2816a7701fa8a6ed8d87327c7d54eacfbfb6edab14a2f2be75/cloudpickle-3.1.1-py3-none-any.whl", hash = "sha256:c8c5a44295039331ee9dad40ba100a9c7297b6f988e50e87ccdf3765a668350e", size = 20992, upload-time = "2025-01-14T17:02:02.417Z" },
 ]
 
 [[package]]
