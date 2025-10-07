@@ -1,3 +1,5 @@
+import importlib
+
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -14,7 +16,7 @@ def ensure_modules_loaded() -> None:
     for app_config in apps.get_app_configs():
         for module_suffix in ["tasks", "block_tasks"]:
             try:
-                __import__(f"{app_config.name}.{module_suffix}")
+                importlib.import_module(f"{app_config.name}.{module_suffix}")
             except ModuleNotFoundError:
                 continue
             except ImportError as e:

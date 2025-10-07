@@ -14,7 +14,6 @@ logger = structlog.get_logger(__name__)
 
 
 class TaskScheduler:
-
     def __init__(
         self,
         registry: MemoryRegistry,
@@ -37,7 +36,7 @@ class TaskScheduler:
         logger.info(
             "TaskScheduler started",
             last_processed_block=self.last_processed_block,
-            registry_functions=len(self.registry.get_functions())
+            registry_functions=len(self.registry.get_functions()),
         )
 
         while self.is_running:
@@ -140,7 +139,6 @@ class TaskScheduler:
                             args=args,
                             exc_info=True,
                         )
-
 
     def initialize_last_block(self) -> None:
         start_from_block_setting = getattr(settings, "BLOCK_DUMPER_START_FROM_BLOCK")

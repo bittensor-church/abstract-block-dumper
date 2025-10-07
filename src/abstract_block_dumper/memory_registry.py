@@ -9,8 +9,8 @@ logger = structlog.getLogger(__name__)
 
 @dataclass
 class RegistryItem:
-    condition: Callable
-    function: Callable
+    condition: Callable[..., bool]
+    function: Callable[..., Any]
     args: list[dict[str, Any]] | None = None
     backfilling_lookback: int | None = None
     celery_kwargs: dict[str, Any] | None = field(default_factory=dict)
@@ -46,7 +46,6 @@ class RegistryItem:
 
 
 class MemoryRegistry:
-
     _functions: list[RegistryItem] = []
 
     @classmethod
@@ -57,7 +56,7 @@ class MemoryRegistry:
             function_name=item.function.__name__,
             executable_path=item.executable_path,
             args=item.args,
-            backfilling_loockback=item.backfilling_lookback
+            backfilling_loockback=item.backfilling_lookback,
         )
 
     @classmethod

@@ -19,10 +19,7 @@ def test_multi_arguments_tasks():
         {"netuid": 2, "custom_param": "test2"},
     ]
 
-    block_task(
-        condition=lambda bn, **kwargs: bn % 10 == 0,
-        args=multi_args
-    )(multi_arg_task)
+    block_task(condition=lambda bn, **kwargs: bn % 10 == 0, args=multi_args)(multi_arg_task)
 
     block_number = 100
 

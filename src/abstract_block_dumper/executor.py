@@ -13,9 +13,7 @@ from abstract_block_dumper.utils import load_function_from_path
 logger = structlog.get_logger(__name__)
 
 
-
 class ExecutionBuilder:
-
     @staticmethod
     def execute(executable_path: str, block_number: int, args: dict[str, Any]) -> Any:
         function = load_function_from_path(executable_path)
@@ -45,9 +43,7 @@ def celery_unit(self, block_number, args: dict[str, Any], executable_path: str) 
     with transaction.atomic():
         try:
             task_attempt = TaskAttempt.objects.select_for_update(nowait=True).get(
-                block_number=block_number,
-                executable_path=executable_path,
-                args_json=args_json
+                block_number=block_number, executable_path=executable_path, args_json=args_json
             )
         except TaskAttempt.DoesNotExist:
             logger.warning(
@@ -81,17 +77,13 @@ def celery_unit(self, block_number, args: dict[str, Any], executable_path: str) 
             task_id=task_attempt.id,
             block_number=block_number,
             executable_path=executable_path,
-            celery_task_id=self.request.id
+            celery_task_id=self.request.id,
         )
 
         result = ExecutionBuilder.execute(executable_path, block_number, args)
         task_attempt.mark_success(result)
 
-        logger.info(
-            "Task completed successfully",
-            task_id=task_attempt.id,
-            result=str(result) if result else None
-        )
+        logger.info("Task completed successfully", task_id=task_attempt.id, result=str(result) if result else None)
         return result
     except Exception:
         logger.error(
@@ -119,7 +111,7 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
         "Scheduling retry",
         task_id=task_attempt.id,
         attempt_count=task_attempt.attempt_count,
-        next_retry_at=task_attempt.next_retry_at
+        next_retry_at=task_attempt.next_retry_at,
     )
 
     celery_unit.apply_async(
@@ -133,13 +125,7 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
 
 
 class CeleryExecutor:
-
-    def execute(
-        self,
-        registry_item: RegistryItem,
-        block_number: int,
-        args: dict[str, Any]
-    ) -> None:
+    def execute(self, registry_item: RegistryItem, block_number: int, args: dict[str, Any]) -> None:
         task_attempt, created = TaskAttempt.create_or_get_pending(
             block_number=block_number,
             executable_path=registry_item.executable_path,
@@ -153,10 +139,7 @@ class CeleryExecutor:
             )
             return
 
-        celery_kwargs = {
-            **registry_item.celery_kwargs,
-            "args": [block_number, args, registry_item.executable_path]
-        }
+        celery_kwargs = {**registry_item.celery_kwargs, "args": [block_number, args, registry_item.executable_path]}
 
         if task_attempt.next_retry_at:
             celery_kwargs["eta"] = task_attempt.next_retry_at
@@ -172,8 +155,4 @@ class CeleryExecutor:
 
         celery_task = celery_unit.apply_async(**celery_kwargs)
 
-        logger.debug(
-            "Celery task scheduled",
-            task_id=task_attempt.id,
-            celery_task_id=celery_task.id
-        )
+        logger.debug("Celery task scheduled", task_id=task_attempt.id, celery_task_id=celery_task.id)

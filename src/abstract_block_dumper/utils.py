@@ -1,3 +1,4 @@
+import importlib
 from collections.abc import Callable
 from functools import cache
 from typing import Any
@@ -38,5 +39,5 @@ def load_function_from_path(function_path: str) -> Callable[..., Any]:
     Load a function from a module path.
     """
     module_path, func_name = function_path.rsplit(".", 1)
-    module = __import__(module_path, fromlist=[func_name])
+    module = importlib.import_module(module_path)
     return getattr(module, func_name)

@@ -12,7 +12,7 @@ def process_every_block(block_number: int, netuid: int | None = None):
     condition=lambda bn, netuid: (bn + netuid) % 50 == 0,
     args=[{"netuid": i} for i in range(10, 15)],  # All subnets
     backfilling_lookback=1000,
-    celery_kwargs={"retry": True}
+    celery_kwargs={"retry": True},
 )
 def subnet_analysis(block_number, netuid):
     # Analyze subnet data

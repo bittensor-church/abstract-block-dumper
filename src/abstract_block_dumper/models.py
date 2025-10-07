@@ -20,11 +20,7 @@ class TaskAttempt(models.Model):
     args_json = models.TextField(default="{}")
 
     # Execution state
-    status = models.CharField(
-        max_length=20,
-        choices=Status.choices,
-        default=Status.PENDING
-    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     celery_task_id = models.CharField(max_length=50, blank=True, null=True)
     execution_result = models.JSONField(null=True)
 
@@ -45,8 +41,7 @@ class TaskAttempt(models.Model):
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=['block_number', 'executable_path', 'args_json'],
-                name='unique_task_attempt'
+                fields=["block_number", "executable_path", "args_json"], name="unique_task_attempt"
             ),
         ]
 
@@ -66,9 +61,8 @@ class TaskAttempt(models.Model):
 
     def can_retry(self) -> bool:
         DEFAULT_BLOCK_DUMPER_MAX_ATTEMPTS = 3
-        return (
-            self.status == self.Status.FAILED
-            and self.attempt_count <= getattr(settings, "BLOCK_DUMPER_MAX_ATTEMPTS", DEFAULT_BLOCK_DUMPER_MAX_ATTEMPTS)
+        return self.status == self.Status.FAILED and self.attempt_count <= getattr(
+            settings, "BLOCK_DUMPER_MAX_ATTEMPTS", DEFAULT_BLOCK_DUMPER_MAX_ATTEMPTS
         )
 
     def mark_started(self, celery_task_id: str) -> None:
@@ -105,7 +99,7 @@ class TaskAttempt(models.Model):
         block_number: int,
         executable_path: str,
         args: dict[str, Any],
-    ) -> tuple['TaskAttempt', bool]:
+    ) -> tuple["TaskAttempt", bool]:
         """
         Create or get a pending task attempt.
         """
@@ -116,10 +110,10 @@ class TaskAttempt(models.Model):
                 block_number=block_number,
                 executable_path=executable_path,
                 args_json=args_json,
-                defaults={"status": cls.Status.PENDING}
+                defaults={"status": cls.Status.PENDING},
             )
 
             if not created and task_attempt.status == cls.Status.FAILED and task_attempt.can_retry():
                 task_attempt.status = cls.Status.PENDING
-                task_attempt.save(update_fields=['status'])
+                task_attempt.save(update_fields=["status"])
         return task_attempt, created

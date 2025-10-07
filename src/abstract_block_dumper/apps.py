@@ -7,4 +7,4 @@ class AbstractBlockDumperConfig(AppConfig):
     verbose_name = "Abstract Block Dumper"
 
     def ready(self) -> None:
-        from abstract_block_dumper.executor import celery_unit
+        pass

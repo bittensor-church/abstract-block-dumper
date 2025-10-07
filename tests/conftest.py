@@ -12,11 +12,13 @@ def every_block_task_func(block_number: int):
     """
     return f"Processed block {block_number}"
 
+
 def modulo_task_func(block_number: int, netuid: int):
     """
     Test function for modulo condition execution.
     """
     return f"Modulo task processed block {block_number} for netuid {netuid}"
+
 
 def failing_task_func(block_number: int):
     """
@@ -24,24 +26,20 @@ def failing_task_func(block_number: int):
     """
     raise ValueError("Test error")
 
+
 @pytest.fixture
 def setup_test_tasks():
     # Clear any existing registrations
     MemoryRegistry.clear()
-    
+
     # Register test tasks using decorators
 
     # every block
-    block_task(
-        condition=lambda bn: True
-    )(every_block_task_func)
+    block_task(condition=lambda bn: True)(every_block_task_func)
 
     # every 5 blocks
-    block_task(
-        condition=lambda bn, netuid: bn % 5 == 0,
-        args=[{"netuid": 1}, {"netuid": 2}]
-    )(modulo_task_func)
-    
+    block_task(condition=lambda bn, netuid: bn % 5 == 0, args=[{"netuid": 1}, {"netuid": 2}])(modulo_task_func)
+
     yield
 
     # Cleanup

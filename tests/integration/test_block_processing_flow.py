@@ -16,28 +16,24 @@ def test_block_processing_flow(mock_get_bittensor_client, setup_test_tasks):
 
     mock_subtensor = mock_get_bittensor_client.return_value
     mock_subtensor.get_current_block.return_value = current_block
-    
+
     # Create scheduler and process block
     scheduler = task_scheduler_factory()
     scheduler.last_processed_block = 99
     scheduler.process_block(current_block)
-    
+
     # Verify tasks were created for block current_block
     task_attempts = TaskAttempt.objects.filter(block_number=current_block)
-    
+
     # Should have: 1 every_block + 2 modulo tasks (100 % 5 == 0)
     assert task_attempts.count() == 3
-    
+
     # Verify every_block task
-    every_block_task = task_attempts.filter(
-        executable_path__contains="every_block_task_func"
-    )
+    every_block_task = task_attempts.filter(executable_path__contains="every_block_task_func")
     assert every_block_task.exists() is True
-    
+
     # Verify modulo tasks
-    modulo_tasks = task_attempts.filter(
-        executable_path__contains="modulo_task_func"
-    )
+    modulo_tasks = task_attempts.filter(executable_path__contains="modulo_task_func")
     assert modulo_tasks.count() == 2
 
 
@@ -45,21 +41,18 @@ def test_block_processing_flow(mock_get_bittensor_client, setup_test_tasks):
 def test_task_execution_success(setup_test_tasks):
     current_block = 100
     task_attempt, _ = TaskAttempt.create_or_get_pending(
-        block_number=current_block,
-        executable_path="tests.conftest.every_block_task_func",
-        args={}
+        block_number=current_block, executable_path="tests.conftest.every_block_task_func", args={}
     )
-    
+
     # Execute task directly using celery_unit (bypassing Celery async for testing)
     result = celery_unit(current_block, {}, "tests.conftest.every_block_task_func")
-    
+
     # Verify task completion
     task_attempt.refresh_from_db()
     assert task_attempt.status == TaskAttempt.Status.SUCCESS
     assert task_attempt.execution_result == f"Processed block {current_block}"
     assert task_attempt.last_attempted_at is not None
     assert result == f"Processed block {current_block}"
-
 
 
 @pytest.mark.django_db

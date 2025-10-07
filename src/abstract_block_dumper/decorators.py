@@ -1,16 +1,19 @@
 from collections.abc import Callable
 from functools import wraps
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from abstract_block_dumper.memory_registry import MemoryRegistry, RegistryItem
 
+P = ParamSpec("P")
+R = TypeVar("R")
+
 
 def block_task(
-    condition: Callable,
+    condition: Callable[..., bool],
     args: list[dict[str, Any]] | None = None,
     backfilling_lookback: int | None = None,
-    celery_kwargs: dict[str, Any] | None = None
-) -> Callable:
+    celery_kwargs: dict[str, Any] | None = None,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Decorator for registering block tasks.
 
@@ -38,7 +41,7 @@ def block_task(
 
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
         if not callable(condition):
             raise ValueError("condition must be a callable.")
 
@@ -59,7 +62,7 @@ def block_task(
         def wrapper(*f_args, **f_kwargs) -> Any:
             return func(*f_args, **f_kwargs)
 
-        wrapper._abd_registry_item = registry_item # type: ignore
+        wrapper._abd_registry_item = registry_item  # type: ignore
 
         return wrapper
 
