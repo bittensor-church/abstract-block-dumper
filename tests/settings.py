@@ -15,7 +15,7 @@ INSTALLED_APPS = [
 ]
 
 # Use PostgreSQL if DATABASE_URL is provided, otherwise SQLite
-if os.environ.get("DATABASE_URL"):
+if os.environ.get("COMPOSE_DB"):
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
