@@ -15,5 +15,5 @@ docker-compose up --build
 2. Access the Django admin interface at `http://localhost:8000/admin` with username `admin` and password `admin` (automatically created).
 3. Start the block dumper scheduler:
 ```bash
-docker-compose exec web python manage.py run_block_dumper
+docker-compose exec web python manage.py block_tasks
 ```
