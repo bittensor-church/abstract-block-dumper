@@ -1,40 +1,15 @@
-from unittest.mock import patch
-
 import pytest
 
+from abstract_block_dumper.block_processor import block_processor_factory
 from abstract_block_dumper.decorators import block_task
 from abstract_block_dumper.executor import celery_unit
+from abstract_block_dumper.memory_registry import task_registry
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.scheduler import task_scheduler_factory
 from tests.conftest import failing_task_func
 
 
-@pytest.mark.django_db
-@patch("abstract_block_dumper.utils.get_bittensor_client")
-def test_block_processing_flow(mock_get_bittensor_client, setup_test_tasks):
-    current_block = 100
-
-    mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = current_block
-
-    # Create scheduler and process block
-    scheduler = task_scheduler_factory()
-    scheduler.last_processed_block = 99
-    scheduler.process_block(current_block)
-
-    # Verify tasks were created for block current_block
-    task_attempts = TaskAttempt.objects.filter(block_number=current_block)
-
-    # Should have: 1 every_block + 2 modulo tasks (100 % 5 == 0)
-    assert task_attempts.count() == 3
-
-    # Verify every_block task
-    every_block_task = task_attempts.filter(executable_path__contains="every_block_task_func")
-    assert every_block_task.exists() is True
-
-    # Verify modulo tasks
-    modulo_tasks = task_attempts.filter(executable_path__contains="modulo_task_func")
-    assert modulo_tasks.count() == 2
+def backfill_task(block_number: int) -> str:
+    return f"Backfilled block {block_number}"
 
 
 @pytest.mark.django_db
@@ -69,8 +44,8 @@ def test_task_execution_failure_and_retry(setup_test_tasks):
         args={},
     )
 
-    with pytest.raises(ValueError, match="Test error"):
-        celery_unit(block_number, {}, executable_function)
+    # Execute the failing task - it won't raise, failure is recorded in DB
+    celery_unit(block_number, {}, executable_function)
 
     task_attempt.refresh_from_db()
     assert task_attempt.status == TaskAttempt.Status.FAILED
@@ -80,24 +55,34 @@ def test_task_execution_failure_and_retry(setup_test_tasks):
 
 
 @pytest.mark.django_db
-@patch("abstract_block_dumper.utils.get_bittensor_client")
-def test_complete_e2e_workflow(mock_get_bittensor_client, setup_test_tasks) -> None:
-    block_number = 300
-    mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = block_number
+def test_process_backfill():
+    current_block = 100
+    backfill_amount = 10
 
-    scheduler = task_scheduler_factory()
-    scheduler.last_processed_block = block_number - 1
-    scheduler.process_block(block_number)
+    block_task(
+        condition=lambda bn: True,
+        backfilling_lookback=backfill_amount,
+    )(backfill_task)
 
-    task_attempts = TaskAttempt.objects.filter(block_number=block_number)
+    block_processor = block_processor_factory()
 
-    assert task_attempts.count() == 3
+    # Get backfilling registry item
+    registry_items = task_registry.get_functions()
+    backfill_item = registry_items[0]
+
+    # Backfilling process
+    block_processor.process_backfill(backfill_item, current_block)
+
+    # Backfilling tasks were created for blocks that match condition
+    task_attempts = TaskAttempt.objects.filter(
+        executable_path__contains="backfill_task",
+        block_number__gte=current_block - backfill_amount,
+        block_number__lte=current_block,
+    )
+
+    assert task_attempts.count() == backfill_amount
 
     for task_attempt in task_attempts:
         celery_unit(task_attempt.block_number, task_attempt.args_dict, task_attempt.executable_path)
-
-    for task_attempt in task_attempts:
         task_attempt.refresh_from_db()
         assert task_attempt.status == TaskAttempt.Status.SUCCESS
-        assert task_attempt.execution_result is not None

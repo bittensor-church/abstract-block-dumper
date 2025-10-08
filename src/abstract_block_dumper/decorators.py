@@ -2,7 +2,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any, ParamSpec, TypeVar
 
-from abstract_block_dumper.memory_registry import MemoryRegistry, RegistryItem
+from abstract_block_dumper.memory_registry import RegistryItem, task_registry
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -19,9 +19,9 @@ def block_task(
 
     Args:
         condition: Lambda function that determines when to execute
-        args: List of argument dictioneries for multi-execution
+        args: List of argument dictionaries for multi-execution
         backfilling_lookback: Number of blocks to backfill
-        celery_kwargs: Additional Celeray task parameters
+        celery_kwargs: Additional Celery task parameters
 
     Examples:
         @block_task(
@@ -33,7 +33,7 @@ def block_task(
         @block_task(
             condition=lambda bn, netuid: bn + netuid % 100 == 0,
             args=[{"netuid": 3}, {"netuid": 22}],
-            backfilling_loockback=300,
+            backfilling_lookback=300,
             celery_kwargs={"queue": "high-priority"}
         )
         def multi_netuid_task(block_number: int, netuid: int):
@@ -45,9 +45,6 @@ def block_task(
         if not callable(condition):
             raise ValueError("condition must be a callable.")
 
-        if args is not None and not isinstance(args, list):
-            raise ValueError("args must be a list of dictionaries")
-
         registry_item = RegistryItem(
             condition=condition,
             function=func,
@@ -56,13 +53,11 @@ def block_task(
             celery_kwargs=celery_kwargs or {},
         )
 
-        MemoryRegistry.register(registry_item)
+        task_registry.register_item(registry_item)
 
         @wraps(func)
         def wrapper(*f_args, **f_kwargs) -> Any:
             return func(*f_args, **f_kwargs)
-
-        wrapper._abd_registry_item = registry_item  # type: ignore
 
         return wrapper
 

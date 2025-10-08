@@ -76,6 +76,8 @@ services:
     depends_on:
       - redis
       - postgres
+      - celery
+      - django
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -97,6 +99,25 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+
+  test:
+    build:
+      context: ..
+      dockerfile: example_project/Dockerfile
+    command: sleep infinity
+    volumes:
+      - .:/app/example_project
+      - ../src:/app/src
+      - ../tests:/app/tests
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - DJANGO_SETTINGS_MODULE=tests.settings
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql://block_dumper:block_dumper123@postgres:5432/block_dumper
+    working_dir: /app
 
 volumes:
   postgres_data:

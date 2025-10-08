@@ -127,27 +127,63 @@ CELERY_BROKER_URL = 'redis://localhost:6379/0'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
 # Abstract Block Dumper specific settings
-BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'mainnet'
+BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'testnet', 'mainnet'
 BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
-BLOCK_TASK_RETRY_BACKOFF = 2  # minutes for retry backoff
-BLOCK_DUMPER_MAX_ATTEMPTS = 3
+BLOCK_TASK_RETRY_BACKOFF = 2  # minutes for retry backoff base
+BLOCK_DUMPER_MAX_ATTEMPTS = 3  # maximum retry attempts
+BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 1440  # maximum retry delay (24 hours)
 ```
 
-### Configuration Options Explained
+### Configuration Options Reference
 
-**BITTENSOR_NETWORK** (str) - [Bittensor network to connect](https://docs.learnbittensor.org/concepts/bittensor-networks) (default: 'finney')
+#### Core Settings
 
-**BLOCK_DUMPER_START_FROM_BLOCK** (str|int|None) - Starting block number:
-- `None`: Resume from the last processed block in the database
-- `'current'` (default): Start from the current block number
-- `int`: Start from the specified block number
+**BITTENSOR_NETWORK** (str, default: `'finney'`) Specifies which [Bittensor network](https://docs.learnbittensor.org/concepts/bittensor-networks) to connect to
 
-**BLOCK_DUMPER_POLL_INTERVAL** (int) - Seconds between polling for new blocks (default: 1)
+**BLOCK_DUMPER_START_FROM_BLOCK** (str|int|None, default: `None`)
+- **Purpose**: Determines the starting block for processing when the scheduler first runs
+- **Valid Values**:
+  - `None`: Resume from the last processed block stored in database
+  - `'current'`: Start from the current blockchain block (skips historical blocks)
+  - `int`: Start from a specific block number (e.g., `1000000`)
+- **Example**: `BLOCK_DUMPER_START_FROM_BLOCK = 'current'`
+- **Performance Impact**: Starting from historical blocks may require significant processing time
 
-**BLOCK_TASK_RETRY_BACKOFF** (int) - minutes for retry backoff
+#### Scheduler Settings
 
-**BLOCK_DUMPER_MAX_ATTEMPTS** (int) - Max attempts to retry failed tasks
+**BLOCK_DUMPER_POLL_INTERVAL** (int, default: `1`)
+- **Purpose**: Seconds to wait between checking for new blocks
+- **Valid Range**: `1` to `3600` (1 second to 1 hour)
+- **Example**: `BLOCK_DUMPER_POLL_INTERVAL = 5`
+- **Performance Impact**:
+  - Lower values (1-2s): Near real-time processing, higher CPU/network usage
+  - Higher values (10-60s): Reduced load but delayed processing
+  - Very low values (<1s) may cause rate limiting
+
+#### Retry and Error Handling Settings
+
+**BLOCK_DUMPER_MAX_ATTEMPTS** (int, default: `3`)
+- **Purpose**: Maximum number of attempts to retry a failed task before giving up
+- **Valid Range**: `1` to `10`
+- **Example**: `BLOCK_DUMPER_MAX_ATTEMPTS = 5`
+- **Performance Impact**: Higher values increase resilience but may delay failure detection
+
+**BLOCK_TASK_RETRY_BACKOFF** (int, default: `1`)
+- **Purpose**: Base number of minutes for exponential backoff retry delays
+- **Valid Range**: `1` to `60`
+- **Example**: `BLOCK_TASK_RETRY_BACKOFF = 2`
+- **Calculation**: Actual delay = `backoff ** attempt_count` minutes
+  - Attempt 1: 2¹ = 2 minutes
+  - Attempt 2: 2² = 4 minutes  
+  - Attempt 3: 2³ = 8 minutes
+- **Performance Impact**: Lower values retry faster but may overwhelm failing services
+
+**BLOCK_TASK_MAX_RETRY_DELAY_MINUTES** (int, default: `1440`)
+- **Purpose**: Maximum delay (in minutes) between retry attempts, caps exponential backoff
+- **Valid Range**: `1` to `10080` (1 minute to 1 week)
+- **Example**: `BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 720`  # 12 hours max
+- **Performance Impact**: Prevents extremely long delays while maintaining backoff benefits
 
 
 ## Performance Features

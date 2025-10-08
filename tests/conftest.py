@@ -1,9 +1,30 @@
+import django
 import pytest
+from celery import Celery
+from django.conf import settings
 
 from abstract_block_dumper.decorators import block_task
-from abstract_block_dumper.memory_registry import MemoryRegistry
+from abstract_block_dumper.memory_registry import task_registry
 
 from .django_fixtures import *  # noqa: F401, F403
+
+# Ensure Django is set up
+if not settings.configured:
+    django.setup()
+
+
+@pytest.fixture(autouse=True)
+def celery_test_app():
+    """Configure Celery for testing with eager mode."""
+    app = Celery("test_app")
+    app.config_from_object(settings, namespace="CELERY")
+
+    # Import the executor module to ensure it uses the test Celery app
+    from abstract_block_dumper import executor
+
+    executor.celery_unit.app = app
+
+    yield app
 
 
 def every_block_task_func(block_number: int):
@@ -29,9 +50,6 @@ def failing_task_func(block_number: int):
 
 @pytest.fixture
 def setup_test_tasks():
-    # Clear any existing registrations
-    MemoryRegistry.clear()
-
     # Register test tasks using decorators
 
     # every block
@@ -42,12 +60,11 @@ def setup_test_tasks():
 
     yield
 
-    # Cleanup
-    MemoryRegistry.clear()
-
 
 @pytest.fixture(autouse=True)
 def cleanup_memory_registry():
-    MemoryRegistry.clear()
+    task_registry.clear()
+
     yield
-    MemoryRegistry.clear()
+
+    task_registry.clear()

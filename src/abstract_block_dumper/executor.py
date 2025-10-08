@@ -1,10 +1,9 @@
 import json
-from sqlite3 import OperationalError
 from typing import Any
 
 import structlog
 from celery import shared_task
-from django.db import transaction
+from django.db import OperationalError, transaction
 
 from abstract_block_dumper.memory_registry import RegistryItem
 from abstract_block_dumper.models import TaskAttempt
@@ -13,21 +12,19 @@ from abstract_block_dumper.utils import load_function_from_path
 logger = structlog.get_logger(__name__)
 
 
-class ExecutionBuilder:
-    @staticmethod
-    def execute(executable_path: str, block_number: int, args: dict[str, Any]) -> Any:
-        function = load_function_from_path(executable_path)
+def execute_from_path(executable_path: str, block_number: int, args: dict[str, Any]) -> Any:
+    function = load_function_from_path(executable_path)
 
-        # Merge block number with args
-        executaion_args = {"block_number": block_number, **args}
+    # Merge block number with args
+    execution_args = {"block_number": block_number, **args}
 
-        logger.info(
-            "Executing function",
-            executable_path=executable_path,
-            block_number=block_number,
-            args=args,
-        )
-        return function(**executaion_args)
+    logger.info(
+        "Executing function",
+        executable_path=executable_path,
+        block_number=block_number,
+        args=args,
+    )
+    return function(**execution_args)
 
 
 @shared_task(bind=True)
@@ -55,59 +52,77 @@ def celery_unit(self, block_number, args: dict[str, Any], executable_path: str) 
             return
         except OperationalError:
             logger.info(
-                "Task already beaing processed by another worker",
+                "Task already being processed by another worker",
                 block_number=block_number,
                 executable_path=executable_path,
             )
             return
 
-    if task_attempt.status != TaskAttempt.Status.PENDING:
-        logger.info(
-            "Task already processed",
-            task_id=task_attempt.id,
-            status=task_attempt.status,
-        )
-        return
+        if task_attempt.status != TaskAttempt.Status.PENDING:
+            logger.info(
+                "Task already processed",
+                task_id=task_attempt.id,
+                status=task_attempt.status,
+            )
+            return
 
-    task_attempt.mark_started(self.request.id)
+        task_attempt.mark_started(self.request.id)
+        try:
+            logger.info(
+                "Starting task execution",
+                task_id=task_attempt.id,
+                block_number=block_number,
+                executable_path=executable_path,
+                celery_task_id=self.request.id,
+            )
 
-    try:
-        logger.info(
-            "Starting task execution",
-            task_id=task_attempt.id,
-            block_number=block_number,
-            executable_path=executable_path,
-            celery_task_id=self.request.id,
-        )
+            result = execute_from_path(executable_path, block_number, args)
+            task_attempt.mark_success(result)
 
-        result = ExecutionBuilder.execute(executable_path, block_number, args)
-        task_attempt.mark_success(result)
+            logger.info("Task completed successfully", task_id=task_attempt.id, result=str(result) if result else None)
+            return result
+        except Exception as e:
+            logger.error("Task execution failed", task_id=task_attempt.id, error_type=type(e).__name__, exc_info=True)
+            task_attempt.mark_failed()
 
-        logger.info("Task completed successfully", task_id=task_attempt.id, result=str(result) if result else None)
-        return result
-    except Exception:
-        logger.error(
-            "Task execution failed",
-            task_id=task_attempt.id,
-            exc_info=True,
-        )
-        task_attempt.mark_failed()
-
-        if task_attempt.can_retry():
-            # schedule_retry(task_attempt)
-            pass
-        # Raise for Celery's error tracking
-        raise
+    # Schedule retry after transaction commits
+    if task_attempt.status == TaskAttempt.Status.FAILED and task_attempt.can_retry():
+        try:
+            schedule_retry(task_attempt)
+        except Exception:
+            logger.error(
+                "Failed to schedule retry, will be picked up by recovery",
+                task_id=task_attempt.id,
+                next_retry_at=task_attempt.next_retry_at,
+                exc_info=True,
+            )
 
 
 def schedule_retry(task_attempt: TaskAttempt) -> None:
     """
     Schedule a retry for a failed task.
+    Task must already be in FAILED state with next_retry_at set by mark_failed().
+    This function only schedules the Celery task - the TaskAttempt will be reset to PENDING
+    when the retry executes via create_or_get_pending().
     """
     if not task_attempt.next_retry_at:
-        logger.warning("Cannot schedule retry, next_retry_at must be set", task_id=task_attempt.id)
+        logger.error(
+            "Cannot schedule retry without next_retry_at",
+            task_id=task_attempt.id,
+            block_number=task_attempt.block_number,
+            executable_path=task_attempt.executable_path,
+        )
+        return
 
-    logger.ifno(
+    if task_attempt.status != TaskAttempt.Status.FAILED:
+        logger.warning(
+            "Attempted to schedule retry for non-failed task",
+            task_id=task_attempt.id,
+            status=task_attempt.status,
+        )
+        return
+
+    logger.info(
         "Scheduling retry",
         task_id=task_attempt.id,
         attempt_count=task_attempt.attempt_count,

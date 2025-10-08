@@ -2,7 +2,7 @@ import pytest
 
 from abstract_block_dumper.decorators import block_task
 from abstract_block_dumper.executor import celery_unit
-from abstract_block_dumper.memory_registry import MemoryRegistry
+from abstract_block_dumper.memory_registry import task_registry
 from abstract_block_dumper.models import TaskAttempt
 
 
@@ -12,7 +12,7 @@ def multi_arg_task(block_number: int, netuid: int, custom_param: str) -> str:
 
 @pytest.mark.django_db
 def test_multi_arguments_tasks():
-    MemoryRegistry.clear()
+    task_registry.clear()
 
     multi_args = [
         {"netuid": 1, "custom_param": "test1"},
@@ -39,4 +39,4 @@ def test_multi_arguments_tasks():
         assert result == expected_result
         assert task_attempt.execution_result == expected_result
 
-    MemoryRegistry.clear()
+    task_registry.clear()

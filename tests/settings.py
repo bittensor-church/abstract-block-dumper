@@ -3,6 +3,8 @@ Django settings used in tests.
 """
 # cookiecutter-rt-pkg macro: requires cookiecutter.is_django_package
 
+import os
+
 DEBUG = True
 SECRET_KEY = "DUMMY"
 
@@ -12,12 +14,25 @@ INSTALLED_APPS = [
     "abstract_block_dumper",
 ]
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": ":memory:",
+# Use PostgreSQL if DATABASE_URL is provided, otherwise SQLite
+if os.environ.get("DATABASE_URL"):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": "block_dumper",
+            "USER": "block_dumper",
+            "PASSWORD": "block_dumper123",
+            "HOST": "postgres",
+            "PORT": "5432",
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": ":memory:",
+        }
+    }
 
 ROOT_URLCONF = __name__
 urlpatterns = []  # type: ignore
@@ -25,6 +40,8 @@ urlpatterns = []  # type: ignore
 # Celery settings for testing
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_BROKER_URL = "memory://"
+CELERY_RESULT_BACKEND = "cache+memory://"
 
 # Abstract Block Dumper specific settings
 # ----------------------------------

@@ -1,8 +1,11 @@
+import abc
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
+
+from abstract_block_dumper.exceptions import ConditionEvaluationError
 
 logger = structlog.getLogger(__name__)
 
@@ -21,9 +24,14 @@ class RegistryItem:
         """
         try:
             return self.condition(block_number, **kwargs)
-        except Exception:
-            logger.error("Error calling conditional match:", exec_info=True)
-        return False
+        except Exception as e:
+            logger.error(
+                "Condition evaluation failed",
+                condition=self.function.__name__,
+                block_number=block_number,
+                exc_info=True,
+            )
+            raise ConditionEvaluationError(f"Failed to evaluate condition: {e}") from e
 
     def get_execution_args(self) -> list[dict[str, Any]]:
         """
@@ -45,24 +53,38 @@ class RegistryItem:
         return self.backfilling_lookback is not None
 
 
-class MemoryRegistry:
+class BaseRegistry(abc.ABC):
+    @abc.abstractmethod
+    def register_item(self, item: RegistryItem) -> None:
+        pass
+
+    @abc.abstractmethod
+    def get_functions(self) -> list[RegistryItem]:
+        pass
+
+    @abc.abstractmethod
+    def clear(self) -> None:
+        pass
+
+
+class MemoryRegistry(BaseRegistry):
     _functions: list[RegistryItem] = []
 
-    @classmethod
-    def register(cls, item: RegistryItem) -> None:
-        cls._functions.append(item)
+    def register_item(self, item: RegistryItem) -> None:
+        self._functions.append(item)
         logger.info(
             "Registered function",
             function_name=item.function.__name__,
             executable_path=item.executable_path,
             args=item.args,
-            backfilling_loockback=item.backfilling_lookback,
+            backfilling_lookback=item.backfilling_lookback,
         )
 
-    @classmethod
-    def get_functions(cls) -> list[RegistryItem]:
-        return cls._functions
+    def get_functions(self) -> list[RegistryItem]:
+        return self._functions
 
-    @classmethod
-    def clear(cls) -> None:
-        cls._functions = []
+    def clear(self) -> None:
+        self._functions = []
+
+
+task_registry = MemoryRegistry()
