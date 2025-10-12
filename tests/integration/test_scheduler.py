@@ -48,6 +48,7 @@ def test_task_failure_triggers_retry():
     assert registry_item is not None
     assert callable(registry_item.function)
 
+    # Note: CELERY_TASK_ALWAYS_EAGER allows to execute it directly
     # Execute the task - it will fail but not raise (failure is recorded in DB)
     registry_item.function(block_number)
     # This task will be rescheduled more times and will fail due to max retry attempts reached
@@ -73,6 +74,7 @@ def test_successful_retry_completes_task() -> None:
     assert registry_item is not None
     assert callable(registry_item.function)
 
+    # Note: CELERY_TASK_ALWAYS_EAGER allows to execute it directly
     registry_item.function(current_block)
 
     task_attempt.refresh_from_db()
@@ -95,6 +97,7 @@ def test_restry_schedules_celery_task_with_eta():
     assert callable(registry_item.function)
 
     with patch.object(registry_item.function, "apply_async") as mock_apply_async:
+        # Note: CELERY_TASK_ALWAYS_EAGER allows to execute it directly
         registry_item.function(current_block)
 
         task_attempt.refresh_from_db()
