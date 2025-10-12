@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 from functools import cache
 
@@ -39,3 +40,12 @@ def get_executable_path(func: Callable) -> str:
     Get executable path for the callable `func`
     """
     return ".".join([func.__module__, func.__name__])
+
+
+def get_max_attempt_limit() -> int:
+    default_max_attempts = 3
+    return getattr(settings, "BLOCK_DUMPER_MAX_ATTEMPTS", default_max_attempts)
+
+
+def serialize_args(args: dict) -> str:
+    return json.dumps(args, sort_keys=True)

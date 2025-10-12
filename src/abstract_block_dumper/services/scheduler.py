@@ -4,9 +4,9 @@ import bittensor as bt
 import structlog
 from django.conf import settings
 
-from abstract_block_dumper.block_processor import BlockProcessor, block_processor_factory
-from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.utils import get_bittensor_client
+import abstract_block_dumper.dal.django_dal as abd_dal
+import abstract_block_dumper.services.utils as abd_utils
+from abstract_block_dumper.services.block_processor import BlockProcessor, block_processor_factory
 
 logger = structlog.get_logger(__name__)
 
@@ -71,24 +71,22 @@ class TaskScheduler:
             elif isinstance(start_from_block_setting, int):
                 self.last_processed_block = start_from_block_setting
                 logger.info(f"Starting from configured block {self.last_processed_block}")
-
             else:
                 raise ValueError(f"Invalid BLOCK_DUMPER_START_FROM_BLOCK value: {start_from_block_setting}")
         else:
             # Default behavior - resume from database
-            latest_execution = TaskAttempt.objects.order_by("-block_number").first()
-            if latest_execution:
-                self.last_processed_block = latest_execution.block_number
-                logger.info(f"Resuming from database block {self.last_processed_block}")
+            last_block_number = abd_dal.get_the_latest_executed_block_number()
 
-            else:
-                self.last_processed_block = self.subtensor.get_current_block()
-                logger.info(f"No database history, starting from current block {self.last_processed_block}")
+            self.last_processed_block = last_block_number or self.subtensor.get_current_block()
+            logger.info(
+                "Resume from the last database block or start from the current block",
+                last_processed_block=self.last_processed_block,
+            )
 
 
 def task_scheduler_factory() -> TaskScheduler:
     return TaskScheduler(
         block_processor=block_processor_factory(),
-        subtensor=get_bittensor_client(),
+        subtensor=abd_utils.get_bittensor_client(),
         poll_interval=getattr(settings, "BLOCK_DUMPER_POLL_INTERVAL", 1),
     )

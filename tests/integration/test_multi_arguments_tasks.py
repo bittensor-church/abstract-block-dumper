@@ -1,9 +1,10 @@
 import pytest
 
+import abstract_block_dumper.dal.django_dal as abd_dal
+from abstract_block_dumper.dal.memory_registry import task_registry
 from abstract_block_dumper.decorators import block_task
-from abstract_block_dumper.memory_registry import task_registry
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.utils import get_executable_path
+from abstract_block_dumper.services.utils import get_executable_path
 
 
 def multi_arg_task(block_number: int, netuid: int, custom_param: str) -> str:
@@ -28,7 +29,7 @@ def test_multi_arguments_tasks():
     assert callable(registry_item.function)
 
     for args in multi_args:
-        task_attempt, _ = TaskAttempt.create_or_get_pending(
+        task_attempt, _ = abd_dal.task_create_or_get_pending(
             block_number=block_number,
             executable_path=executable_path,
             args=args,

@@ -186,20 +186,6 @@ BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 1440  # maximum retry delay (24 hours)
 - **Performance Impact**: Prevents extremely long delays while maintaining backoff benefits
 
 
-## Performance Features
-
-### Caching
-The package includes intelligent caching to improve performance:
-
-- **Bittensor Client Caching**: The bittensor client is cached indefinitely since network configuration doesn't change during runtime
-- **Active Netuids Caching**: Active netuids are cached for 5 minutes by default to reduce network calls
-
-You can also customize the netuids cache duration:
-```python
-from abstract_block_dumper.utils import get_all_active_netuids
-netuids = get_all_active_netuids(cache_duration=600)  # Cache for 10 minutes
-```
-
 ## Example Project
 
 The repository includes a complete working example in the `example_project/` directory that demonstrates:

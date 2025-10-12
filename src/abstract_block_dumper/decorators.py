@@ -1,4 +1,3 @@
-import json
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -6,19 +5,13 @@ import structlog
 from celery import Task, shared_task
 from django.db import OperationalError, transaction
 
-from abstract_block_dumper.memory_registry import RegistryItem, task_registry
+import abstract_block_dumper.dal.django_dal as abd_dal
+import abstract_block_dumper.services.utils as abd_utils
+from abstract_block_dumper.dal.memory_registry import RegistryItem, task_registry
+from abstract_block_dumper.exceptions import CeleryTaskLocked
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.utils import get_current_celery_task_id, get_executable_path
 
 logger = structlog.get_logger(__name__)
-
-
-class CustomCeleryTaskException(Exception):
-    pass
-
-
-class CeleryTaskLocked(Exception):
-    pass
 
 
 def schedule_retry(task_attempt: TaskAttempt) -> None:
@@ -51,7 +44,7 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
         next_retry_at=task_attempt.next_retry_at,
     )
 
-    task_attempt.schedule_retry()
+    abd_dal.task_schedule_to_retry(task_attempt)
 
     celery_task = task_registry.get_by_executable_path(task_attempt.executable_path)
     if not celery_task:
@@ -71,15 +64,14 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
 
 
 def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | None:
-    args_json = json.dumps(kwargs, sort_keys=True)
-    executable_path = get_executable_path(func)
+    executable_path = abd_utils.get_executable_path(func)
 
     with transaction.atomic():
         try:
             task_attempt = TaskAttempt.objects.select_for_update().get(
                 block_number=block_number,
                 executable_path=executable_path,
-                args_json=args_json,
+                args_json=abd_utils.serialize_args(kwargs),
             )
         except TaskAttempt.DoesNotExist:
             logger.warning(
@@ -102,10 +94,9 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
                 task_id=task_attempt.id,
                 status=task_attempt.status,
             )
-            # raise CeleryTaskLocked("Task already processed")
             return None
 
-        task_attempt.mark_started(get_current_celery_task_id())
+        abd_dal.task_mark_as_started(task_attempt, abd_utils.get_current_celery_task_id())
 
         # Start task execution
         try:
@@ -120,7 +111,8 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
             )
 
             result = func(**execution_kwargs)
-            task_attempt.mark_success(result)
+
+            abd_dal.task_mark_as_success(task_attempt, result)
 
             logger.info("Task completed successfully", task_id=task_attempt.id)
             return {"result": result}
@@ -131,10 +123,10 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
                 error_type=type(e).__name__,
                 exc_info=True,
             )
-            task_attempt.mark_failed()
+            abd_dal.task_mark_as_failed(task_attempt)
 
     # Schedule retry after transaction commits:
-    if task_attempt.can_retry():
+    if abd_dal.task_can_retry(task_attempt):
         try:
             schedule_retry(task_attempt)
         except Exception:
@@ -195,7 +187,7 @@ def block_task(
 
         # Wrap with celery shared_task
         celery_task = shared_task(
-            name=get_executable_path(func),
+            name=abd_utils.get_executable_path(func),
             bind=False,
             **celery_kwargs or {},
         )(shared_celery_task)

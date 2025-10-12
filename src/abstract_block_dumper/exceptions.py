@@ -8,3 +8,9 @@ class ConditionEvaluationError(AbstractBlockDumperError):
     """Condition failed to evaluate."""
 
     pass
+
+
+class CeleryTaskLocked(Exception):
+    """Celery task execution is locked"""
+
+    pass

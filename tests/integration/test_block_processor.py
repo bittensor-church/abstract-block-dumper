@@ -3,11 +3,11 @@ from unittest.mock import patch
 import pytest
 
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.scheduler import task_scheduler_factory
+from abstract_block_dumper.services.scheduler import task_scheduler_factory
 
 
 @pytest.mark.django_db
-@patch("abstract_block_dumper.utils.get_bittensor_client")
+@patch("abstract_block_dumper.services.utils.get_bittensor_client")
 def test_complete_e2e_workflow(mock_get_bittensor_client, setup_test_tasks) -> None:
     block_number = 300
     mock_subtensor = mock_get_bittensor_client.return_value
@@ -28,7 +28,7 @@ def test_complete_e2e_workflow(mock_get_bittensor_client, setup_test_tasks) -> N
 
 
 @pytest.mark.django_db
-@patch("abstract_block_dumper.utils.get_bittensor_client")
+@patch("abstract_block_dumper.services.utils.get_bittensor_client")
 def test_block_processing_flow(mock_get_bittensor_client, setup_test_tasks):
     current_block = 100
 

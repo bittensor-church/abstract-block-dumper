@@ -1,11 +1,13 @@
 import pytest
 
-from abstract_block_dumper.block_processor import block_processor_factory
+import abstract_block_dumper.dal.django_dal as abd_dal
+import abstract_block_dumper.models as abd_models
+import abstract_block_dumper.services.utils as abd_utils
+from abstract_block_dumper.dal.memory_registry import task_registry
 from abstract_block_dumper.decorators import block_task
-from abstract_block_dumper.memory_registry import task_registry
-from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.utils import get_executable_path
+from abstract_block_dumper.services.block_processor import block_processor_factory
 from tests.conftest import every_block_task_func, failing_task_func
+from tests.fatories import TaskAttemptFactory
 
 
 def backfill_task(block_number: int) -> str:
@@ -15,8 +17,8 @@ def backfill_task(block_number: int) -> str:
 @pytest.mark.django_db
 def test_task_execution_success(setup_test_tasks):
     current_block = 100
-    executable_path = get_executable_path(every_block_task_func)
-    task_attempt, _ = TaskAttempt.create_or_get_pending(block_number=current_block, executable_path=executable_path)
+    executable_path = abd_utils.get_executable_path(every_block_task_func)
+    task_attempt = TaskAttemptFactory(is_pending=True, block_number=current_block, executable_path=executable_path)
 
     registry_item = task_registry.get_by_executable_path(task_attempt.executable_path)
     assert registry_item is not None
@@ -31,7 +33,7 @@ def test_task_execution_success(setup_test_tasks):
 
     # Verify task completion
     task_attempt.refresh_from_db()
-    assert task_attempt.status == TaskAttempt.Status.SUCCESS
+    assert task_attempt.status == abd_models.TaskAttempt.Status.SUCCESS
     assert task_attempt.execution_result == f"Processed block {current_block}"
     assert task_attempt.last_attempted_at is not None
 
@@ -39,8 +41,8 @@ def test_task_execution_success(setup_test_tasks):
 @pytest.mark.django_db
 def test_task_execution_failure_and_retry():
     current_block = 150
-    executable_path = get_executable_path(failing_task_func)
-    task_attempt, _ = TaskAttempt.create_or_get_pending(
+    executable_path = abd_utils.get_executable_path(failing_task_func)
+    task_attempt, _ = abd_dal.task_create_or_get_pending(
         block_number=current_block,
         executable_path=executable_path,
     )
@@ -54,9 +56,9 @@ def test_task_execution_failure_and_retry():
 
     # Test that retry reached the limit of attempts
     task_attempt.refresh_from_db()
-    assert task_attempt.can_retry() is False
-    assert task_attempt.status == TaskAttempt.Status.FAILED
-    assert task_attempt.attempt_count == task_attempt.get_max_attempt()
+    assert abd_dal.task_can_retry(task_attempt) is False
+    assert task_attempt.status == abd_models.TaskAttempt.Status.FAILED
+    assert task_attempt.attempt_count == abd_utils.get_max_attempt_limit()
     assert task_attempt.next_retry_at is None
 
 
@@ -80,7 +82,7 @@ def test_process_backfill():
     block_processor.process_backfill(backfill_item, current_block)
 
     # Backfilling tasks were created for blocks that match condition
-    task_attempts = TaskAttempt.objects.filter(
+    task_attempts = abd_models.TaskAttempt.objects.filter(
         executable_path__contains="backfill_task",
         block_number__gte=current_block - backfill_amount,
         block_number__lte=current_block,
@@ -88,6 +90,6 @@ def test_process_backfill():
 
     assert task_attempts.count() == backfill_amount
 
-    qs = TaskAttempt.objects.filter(id__in=task_attempts.values_list("id", flat=True))
+    qs = abd_models.TaskAttempt.objects.filter(id__in=task_attempts.values_list("id", flat=True))
 
-    assert qs.count() == qs.filter(status=TaskAttempt.Status.SUCCESS).count()
+    assert qs.count() == qs.filter(status=abd_models.TaskAttempt.Status.SUCCESS).count()

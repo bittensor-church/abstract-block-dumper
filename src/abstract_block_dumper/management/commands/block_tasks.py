@@ -1,8 +1,8 @@
 from django.core.management.base import BaseCommand
 
+from abstract_block_dumper.dal.memory_registry import task_registry
 from abstract_block_dumper.discovery import ensure_modules_loaded
-from abstract_block_dumper.memory_registry import task_registry
-from abstract_block_dumper.scheduler import task_scheduler_factory
+from abstract_block_dumper.services.scheduler import task_scheduler_factory
 
 
 class Command(BaseCommand):

@@ -3,7 +3,7 @@ import pytest
 from celery import Celery
 from django.conf import settings
 
-from abstract_block_dumper.memory_registry import task_registry
+from abstract_block_dumper.dal.memory_registry import task_registry
 
 from .django_fixtures import *  # noqa: F401, F403
 

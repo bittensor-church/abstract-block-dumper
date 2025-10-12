@@ -2,7 +2,8 @@ from typing import Any
 
 import structlog
 
-from abstract_block_dumper.memory_registry import RegistryItem
+import abstract_block_dumper.dal.django_dal as abd_dal
+from abstract_block_dumper.dal.memory_registry import RegistryItem
 from abstract_block_dumper.models import TaskAttempt
 
 logger = structlog.get_logger(__name__)
@@ -10,7 +11,7 @@ logger = structlog.get_logger(__name__)
 
 class CeleryExecutor:
     def execute(self, registry_item: RegistryItem, block_number: int, args: dict[str, Any]) -> None:
-        task_attempt, created = TaskAttempt.create_or_get_pending(
+        task_attempt, created = abd_dal.task_create_or_get_pending(
             block_number=block_number,
             executable_path=registry_item.executable_path,
             args=args,

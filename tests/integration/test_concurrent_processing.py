@@ -6,10 +6,11 @@ import pytest
 from celery.result import EagerResult
 from django.conf import settings
 
+import abstract_block_dumper.dal.django_dal as abd_dal
+from abstract_block_dumper.dal.memory_registry import task_registry
 from abstract_block_dumper.decorators import block_task
-from abstract_block_dumper.memory_registry import task_registry
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.utils import get_executable_path
+from abstract_block_dumper.services.utils import get_executable_path
 
 
 def simple_task(block_number: int) -> str:
@@ -21,11 +22,12 @@ def simple_task(block_number: int) -> str:
 def test_concurrent_celery_task_call() -> None:
     current_block = 6000
     block_task(condition=lambda bn: True)(simple_task)
-    task_attempt, _ = TaskAttempt.create_or_get_pending(
+
+    task_attempt, _ = abd_dal.task_create_or_get_pending(
         block_number=current_block, executable_path=get_executable_path(simple_task)
     )
-    N = 20
 
+    N = 20
     barrier = threading.Barrier(N)
 
     def celery_task_registry_call(i: int, task: TaskAttempt) -> Any | EagerResult | Any:

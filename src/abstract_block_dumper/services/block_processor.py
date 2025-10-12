@@ -1,13 +1,12 @@
-import json
-
 import structlog
 from django.db import transaction
-from django.utils import timezone
 
+import abstract_block_dumper.dal.django_dal as abd_dal
+from abstract_block_dumper.dal.memory_registry import BaseRegistry, RegistryItem, task_registry
 from abstract_block_dumper.exceptions import ConditionEvaluationError
-from abstract_block_dumper.executor import CeleryExecutor
-from abstract_block_dumper.memory_registry import BaseRegistry, RegistryItem, task_registry
 from abstract_block_dumper.models import TaskAttempt
+from abstract_block_dumper.services.executor import CeleryExecutor
+from abstract_block_dumper.services.utils import serialize_args
 
 logger = structlog.get_logger(__name__)
 
@@ -63,16 +62,13 @@ class BlockProcessor:
         execution_args_list = registry_item.get_execution_args()
 
         for args in execution_args_list:
-            args_json = self._serialize_args(args)
+            args_json = serialize_args(args)
 
-            executed_blocks = set(
-                TaskAttempt.objects.filter(
-                    executable_path=registry_item.executable_path,
-                    args_json=args_json,
-                    block_number__gte=start_block,
-                    block_number__lt=current_block,
-                    status=TaskAttempt.Status.SUCCESS,
-                ).values_list("block_number", flat=True)
+            executed_blocks = abd_dal.executed_block_numbers(
+                registry_item.executable_path,
+                args_json,
+                start_block,
+                current_block,
             )
 
             for block_number in range(start_block, current_block):
@@ -103,14 +99,8 @@ class BlockProcessor:
 
         This handles tasks that may have been lost due to scheduler restarts.
         """
-        ready_to_retry = TaskAttempt.objects.filter(
-            status=TaskAttempt.Status.FAILED,
-            next_retry_at__isnull=False,
-            next_retry_at__lte=timezone.now(),
-        )
-
         retry_count = 0
-        for task_attempt in ready_to_retry:
+        for task_attempt in abd_dal.get_ready_to_retry_attempts():
             try:
                 # Find the registry item to get celery_kwargs
                 registry_item = self.registry.get_by_executable_path(task_attempt.executable_path)
@@ -128,15 +118,15 @@ class BlockProcessor:
                     task_attempt = TaskAttempt.objects.select_for_update().get(id=task_attempt.id)
 
                     # Verify task is still in FAILED state and ready for retry
-                    if task_attempt.status != TaskAttempt.Status.FAILED:
+                    if task_attempt.status == TaskAttempt.Status.SUCCESS:
                         logger.info(
-                            "Task no longer in FAILED state, skipping recovery",
+                            "Task was already recovered",
                             task_id=task_attempt.id,
                             current_status=task_attempt.status,
                         )
                         continue
 
-                    if not task_attempt.can_retry():
+                    if not abd_dal.task_can_retry(task_attempt):
                         logger.info(
                             "Task cannot be retried, skipping recovery",
                             task_id=task_attempt.id,
@@ -145,9 +135,7 @@ class BlockProcessor:
                         continue
 
                     # Reset to PENDING and clear celery_task_id
-                    task_attempt.celery_task_id = None
-                    task_attempt.status = TaskAttempt.Status.PENDING
-                    task_attempt.save(update_fields=["status", "celery_task_id"])
+                    abd_dal.reset_to_pending(task_attempt)
 
                 # Execute outside of transaction to avoid holding locks too long
                 self.executor.execute(registry_item, task_attempt.block_number, task_attempt.args_dict)
@@ -169,10 +157,9 @@ class BlockProcessor:
                 try:
                     task_attempt.refresh_from_db()
                     # If task is still PENDING after error, revert to FAILED
-                    # (execution may have failed before celery_unit could mark it)
+                    # (execution may have failed before celery task could mark it)
                     if task_attempt.status == TaskAttempt.Status.PENDING:
-                        task_attempt.status = TaskAttempt.Status.FAILED
-                        task_attempt.save(update_fields=["status"])
+                        abd_dal.revert_to_failed(task_attempt)
                 except TaskAttempt.DoesNotExist:
                     # Task was deleted during recovery, nothing to revert
                     pass
@@ -180,25 +167,13 @@ class BlockProcessor:
         if retry_count > 0:
             logger.info("Retry recovery completed", recovered_count=retry_count)
 
-    def _serialize_args(self, args) -> str:
-        return json.dumps(args, sort_keys=True)
-
     def _cleanup_phantom_tasks(self) -> None:
         """
         Clean up tasks marked as SUCCESS but never actually started.
         Only removes tasks that were created recently (within last hour) to avoid
         deleting legitimate tasks marked as success by external processes.
         """
-        from datetime import timedelta
-
-        # Only clean up recent phantom tasks to avoid deleting legitimate external successes
-        recent_phantom_tasks = TaskAttempt.objects.filter(
-            status=TaskAttempt.Status.SUCCESS,
-            last_attempted_at__isnull=True,
-            celery_task_id__isnull=True,  # Additional safety check
-            created_at__gte=timezone.now() - timedelta(hours=1),  # Only recent tasks
-        )
-
+        recent_phantom_tasks = abd_dal.get_recent_phantom_tasks()
         count = recent_phantom_tasks.count()
         if count > 0:
             recent_phantom_tasks.delete()
