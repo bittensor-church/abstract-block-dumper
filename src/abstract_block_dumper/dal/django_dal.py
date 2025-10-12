@@ -34,12 +34,12 @@ def executed_block_numbers(executable_path: str, args_json: str, from_block: int
 def reset_to_pending(task: abd_models.TaskAttempt) -> None:
     task.celery_task_id = None
     task.status = abd_models.TaskAttempt.Status.PENDING
-    task.save(update_fields=["status", "celery_task_id"])
+    task.save()
 
 
 def revert_to_failed(task: abd_models.TaskAttempt) -> None:
     task.status = abd_models.TaskAttempt.Status.FAILED
-    task.save(update_fields=["status"])
+    task.save()
 
 
 def get_recent_phantom_tasks() -> QuerySet[abd_models.TaskAttempt]:
@@ -139,7 +139,7 @@ def task_create_or_get_pending(
             now = timezone.now()
             if task.next_retry_at is None or task.next_retry_at <= now:
                 task.status = abd_models.TaskAttempt.Status.PENDING
-                task.save(update_fields=["status"])
+                task.save()
     return task, created
 
 

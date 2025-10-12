@@ -115,6 +115,59 @@ def process_multi_netuid_task(block_number: int, netuid: int):
 ```
 
 
+## Maintenance Tasks
+
+### Cleanup Old Task Attempts
+
+The framework provides a maintenance task to clean up old task records and maintain database performance:
+
+```python
+from abstract_block_dumper.tasks import cleanup_old_tasks
+
+# Delete tasks older than 7 days (default)
+cleanup_old_tasks.delay()
+
+# Delete tasks older than 30 days
+cleanup_old_tasks.delay(days=30)
+```
+
+This task deletes all succeeded or unrecoverable failed tasks older than the specified number of days. It never deletes tasks with PENDING or RUNNING status to ensure ongoing work is preserved.
+
+#### Running the Cleanup Task
+
+**Option 1: Manual Execution**
+```bash
+# Using Django shell
+python manage.py shell -c "from abstract_block_dumper.tasks import cleanup_old_tasks; cleanup_old_tasks.delay()"
+```
+
+**Option 2: Cron Job (Recommended - once per day)**
+```bash
+# Add to crontab (daily at 2 AM)
+0 2 * * * cd /path/to/your/project && python manage.py shell -c "from abstract_block_dumper.tasks import cleanup_old_tasks; cleanup_old_tasks.delay()"
+```
+
+**Option 3: Celery Beat (Automated Scheduling)**
+
+Add this to your Django `settings.py`:
+
+```python
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'cleanup-old-tasks': {
+        'task': 'abstract_block_dumper.cleanup_old_tasks',
+        'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
+        'kwargs': {'days': 7},  # Customize retention period
+    },
+}
+```
+
+Then start the Celery beat scheduler:
+```bash
+celery -A your_project beat --loglevel=info
+```
+
 ## Configuration
 
 ### Required Django Settings
