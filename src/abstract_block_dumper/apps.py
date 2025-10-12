@@ -5,6 +5,3 @@ class AbstractBlockDumperConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "abstract_block_dumper"
     verbose_name = "Abstract Block Dumper"
-
-    def ready(self) -> None:
-        from abstract_block_dumper.executor import celery_unit  # noqa

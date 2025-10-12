@@ -59,10 +59,12 @@ class TaskAttempt(models.Model):
     def args_dict(self, value: dict[str, Any]) -> None:
         self.args_json = json.dumps(value, sort_keys=True)
 
-    def can_retry(self) -> bool:
+    def get_max_attempt(self) -> int:
         default_max_attempts = 3
-        max_attempts = getattr(settings, "BLOCK_DUMPER_MAX_ATTEMPTS", default_max_attempts)
-        return self.status == self.Status.FAILED and self.attempt_count < max_attempts
+        return getattr(settings, "BLOCK_DUMPER_MAX_ATTEMPTS", default_max_attempts)
+
+    def can_retry(self) -> bool:
+        return self.status == self.Status.FAILED and self.attempt_count < self.get_max_attempt()
 
     def mark_started(self, celery_task_id: str) -> None:
         self.celery_task_id = celery_task_id
@@ -96,6 +98,10 @@ class TaskAttempt(models.Model):
             self.next_retry_at = timezone.now() + timedelta(minutes=backoff_minutes)
         else:
             self.next_retry_at = None
+        self.save()
+
+    def schedule_retry(self):
+        self.status = self.Status.PENDING
         self.save()
 
     @classmethod

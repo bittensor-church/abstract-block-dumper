@@ -32,9 +32,7 @@ class BlockProcessor:
                 )
 
     def process_registry_item(self, registry_item: RegistryItem, block_number: int) -> None:
-        execution_args_list = registry_item.get_execution_args()
-
-        for args in execution_args_list:
+        for args in registry_item.get_execution_args():
             try:
                 if registry_item.match_condition(block_number, **args):
                     self.executor.execute(registry_item, block_number, args)
@@ -77,25 +75,27 @@ class BlockProcessor:
                 ).values_list("block_number", flat=True)
             )
 
-            for block_num in range(start_block, current_block):
-                if block_num not in executed_blocks:
-                    try:
-                        if registry_item.match_condition(block_num, **args):
-                            logger.debug(
-                                "Backfilling block",
-                                function_name=registry_item.function.__name__,
-                                block_number=block_num,
-                                args=args,
-                            )
-                            self.executor.execute(registry_item, block_num, args)
-                    except Exception:
-                        logger.error(
-                            "Error during backfill",
+            for block_number in range(start_block, current_block):
+                if block_number in executed_blocks:
+                    continue
+
+                try:
+                    if registry_item.match_condition(block_number, **args):
+                        logger.debug(
+                            "Backfilling block",
                             function_name=registry_item.function.__name__,
-                            block_number=block_num,
+                            block_number=block_number,
                             args=args,
-                            exc_info=True,
                         )
+                        self.executor.execute(registry_item, block_number, args)
+                except Exception:
+                    logger.error(
+                        "Error during backfill",
+                        function_name=registry_item.function.__name__,
+                        block_number=block_number,
+                        args=args,
+                        exc_info=True,
+                    )
 
     def recover_failed_retries(self) -> None:
         """
@@ -113,12 +113,7 @@ class BlockProcessor:
         for task_attempt in ready_to_retry:
             try:
                 # Find the registry item to get celery_kwargs
-                registry_item = None
-                for item in self.registry.get_functions():
-                    if item.executable_path == task_attempt.executable_path:
-                        registry_item = item
-                        break
-
+                registry_item = self.registry.get_by_executable_path(task_attempt.executable_path)
                 if not registry_item:
                     logger.warning(
                         "Registry item not found for failed task, skipping retry recovery",

@@ -12,6 +12,8 @@ dependencies = [
     "flower>=2.0.0",
     "dj-database-url>=2.0.0",
     "redis>=5.0.0",
+    "pytest>=8.4.2",
+    "pytest-django>=4.9.0",
 ]
 
 [dependency-groups]
@@ -25,3 +27,7 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 abstract-block-dumper = { path = "../", editable = true }
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "example_project.settings"
+pythonpath = ["."]

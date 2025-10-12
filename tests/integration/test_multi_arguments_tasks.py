@@ -1,9 +1,9 @@
 import pytest
 
 from abstract_block_dumper.decorators import block_task
-from abstract_block_dumper.executor import celery_unit
 from abstract_block_dumper.memory_registry import task_registry
 from abstract_block_dumper.models import TaskAttempt
+from abstract_block_dumper.utils import get_executable_path
 
 
 def multi_arg_task(block_number: int, netuid: int, custom_param: str) -> str:
@@ -22,21 +22,30 @@ def test_multi_arguments_tasks():
     block_task(condition=lambda bn, **kwargs: bn % 10 == 0, args=multi_args)(multi_arg_task)
 
     block_number = 100
+    executable_path = get_executable_path(multi_arg_task)
+    registry_item = task_registry.get_by_executable_path(executable_path)
+    assert registry_item is not None
+    assert callable(registry_item.function)
 
     for args in multi_args:
         task_attempt, _ = TaskAttempt.create_or_get_pending(
             block_number=block_number,
-            executable_path=f"{multi_arg_task.__module__}.{multi_arg_task.__name__}",
+            executable_path=executable_path,
             args=args,
         )
 
-        result = celery_unit(block_number, args, task_attempt.executable_path)
+        eager_output = registry_item.function.delay(block_number, **args)
+        output = eager_output.result
+
+        assert isinstance(output, dict)
+        assert "result" in output
+
+        result = output.get("result")
+        expected_result = f"Block {block_number}, netuid {args['netuid']}, custom_param {args['custom_param']}"
+        assert result == expected_result
 
         task_attempt.refresh_from_db()
         assert task_attempt.status == TaskAttempt.Status.SUCCESS
-
-        expected_result = f"Block {block_number}, netuid {args['netuid']}, custom_param {args['custom_param']}"
-        assert result == expected_result
         assert task_attempt.execution_result == expected_result
 
     task_registry.clear()

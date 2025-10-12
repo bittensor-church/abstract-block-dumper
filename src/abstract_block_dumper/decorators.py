@@ -1,11 +1,149 @@
+import json
 from collections.abc import Callable
-from functools import wraps
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, cast
+
+import structlog
+from celery import Task, shared_task
+from django.db import OperationalError, transaction
 
 from abstract_block_dumper.memory_registry import RegistryItem, task_registry
+from abstract_block_dumper.models import TaskAttempt
+from abstract_block_dumper.utils import get_current_celery_task_id, get_executable_path
 
-P = ParamSpec("P")
-R = TypeVar("R")
+logger = structlog.get_logger(__name__)
+
+
+class CustomCeleryTaskException(Exception):
+    pass
+
+
+class CeleryTaskLocked(Exception):
+    pass
+
+
+def schedule_retry(task_attempt: TaskAttempt) -> None:
+    """
+    Schedule a retry for a failed task by calling the decorated Celery task directly.
+
+    Task must already be in FAILED state with next_retry_at set by mark_failed()
+    """
+
+    if not task_attempt.next_retry_at:
+        logger.error(
+            "Cannot schedule retry without next_retry_at",
+            task_id=task_attempt.id,
+            block_number=task_attempt.block_number,
+            executable_path=task_attempt.executable_path,
+        )
+
+    if task_attempt.status != TaskAttempt.Status.FAILED:
+        logger.warning(
+            "Attempted to schedule retry for non-failed task",
+            task_id=task_attempt.id,
+            status=task_attempt.status,
+        )
+        return
+
+    logger.info(
+        "Scheduling retry",
+        task_id=task_attempt.id,
+        attempt_count=task_attempt.attempt_count,
+        next_retry_at=task_attempt.next_retry_at,
+    )
+
+    task_attempt.schedule_retry()
+
+    celery_task = task_registry.get_by_executable_path(task_attempt.executable_path)
+    if not celery_task:
+        logger.error(
+            "Cannot schedule retry - task not found in registry",
+            executable_path=task_attempt.executable_path,
+        )
+        return
+
+    celery_task.function.apply_async(
+        kwargs={
+            "block_number": task_attempt.block_number,
+            **task_attempt.args_dict,
+        },
+        eta=task_attempt.next_retry_at,
+    )
+
+
+def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | None:
+    args_json = json.dumps(kwargs, sort_keys=True)
+    executable_path = get_executable_path(func)
+
+    with transaction.atomic():
+        try:
+            task_attempt = TaskAttempt.objects.select_for_update().get(
+                block_number=block_number,
+                executable_path=executable_path,
+                args_json=args_json,
+            )
+        except TaskAttempt.DoesNotExist:
+            logger.warning(
+                "TaskAttempt not found - task may have been canceled directly",
+                block_number=block_number,
+                executable_path=executable_path,
+            )
+            raise CeleryTaskLocked("TaskAttempt not found - task may have been canceled directly")
+        except OperationalError:
+            logger.info(
+                "Task already being processed by another worker",
+                block_number=block_number,
+                executable_path=executable_path,
+            )
+            raise CeleryTaskLocked("Task already being processed by another worker")
+
+        if task_attempt.status != TaskAttempt.Status.PENDING:
+            logger.info(
+                "Task already processed",
+                task_id=task_attempt.id,
+                status=task_attempt.status,
+            )
+            # raise CeleryTaskLocked("Task already processed")
+            return None
+
+        task_attempt.mark_started(get_current_celery_task_id())
+
+        # Start task execution
+        try:
+            execution_kwargs = {"block_number": block_number, **kwargs}
+            logger.info(
+                "Starting task execution",
+                task_id=task_attempt.id,
+                block_number=block_number,
+                executable_path=executable_path,
+                celery_task_id=task_attempt.celery_task_id,
+                execution_kwargs=execution_kwargs,
+            )
+
+            result = func(**execution_kwargs)
+            task_attempt.mark_success(result)
+
+            logger.info("Task completed successfully", task_id=task_attempt.id)
+            return {"result": result}
+        except Exception as e:
+            logger.error(
+                "Task execution failed",
+                task_id=task_attempt.id,
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
+            task_attempt.mark_failed()
+
+    # Schedule retry after transaction commits:
+    if task_attempt.can_retry():
+        try:
+            schedule_retry(task_attempt)
+        except Exception:
+            logger.error(
+                "Failed to schedule retry",
+                task_id=task_attempt.id,
+                exc_info=True,
+            )
+    return None
 
 
 def block_task(
@@ -13,7 +151,7 @@ def block_task(
     args: list[dict[str, Any]] | None = None,
     backfilling_lookback: int | None = None,
     celery_kwargs: dict[str, Any] | None = None,
-) -> Callable[[Callable[P, R]], Callable[P, R]]:
+) -> Callable[..., Any]:
     """
     Decorator for registering block tasks.
 
@@ -41,24 +179,40 @@ def block_task(
 
     """
 
-    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+    def decorator(func: Callable[..., Any]) -> Any:
         if not callable(condition):
             raise ValueError("condition must be a callable.")
 
-        registry_item = RegistryItem(
-            condition=condition,
-            function=func,
-            args=args,
-            backfilling_lookback=backfilling_lookback,
-            celery_kwargs=celery_kwargs or {},
+        # Celery task wrapper
+        def shared_celery_task(block_number: int, **kwargs) -> None | Any:
+            """
+            Wrapper that handles TaskAttempt tracking and executed the original
+            function
+
+            This entire wrapper becomes a Celery task.
+            """
+            return _celery_task_wrapper(func, block_number, **kwargs)
+
+        # Wrap with celery shared_task
+        celery_task = shared_task(
+            name=get_executable_path(func),
+            bind=False,
+            **celery_kwargs or {},
+        )(shared_celery_task)
+
+        # Store original function referefence for introspection
+        celery_task._original_func = func
+
+        # Register the Celery task
+        task_registry.register_item(
+            RegistryItem(
+                condition=condition,
+                function=cast(Task, celery_task),
+                args=args,
+                backfilling_lookback=backfilling_lookback,
+                celery_kwargs=celery_kwargs or {},
+            )
         )
-
-        task_registry.register_item(registry_item)
-
-        @wraps(func)
-        def wrapper(*f_args, **f_kwargs) -> Any:
-            return func(*f_args, **f_kwargs)
-
-        return wrapper
+        return celery_task
 
     return decorator

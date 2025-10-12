@@ -3,7 +3,6 @@ import pytest
 from celery import Celery
 from django.conf import settings
 
-from abstract_block_dumper.decorators import block_task
 from abstract_block_dumper.memory_registry import task_registry
 
 from .django_fixtures import *  # noqa: F401, F403
@@ -18,11 +17,6 @@ def celery_test_app():
     """Configure Celery for testing with eager mode."""
     app = Celery("test_app")
     app.config_from_object(settings, namespace="CELERY")
-
-    # Import the executor module to ensure it uses the test Celery app
-    from abstract_block_dumper import executor
-
-    executor.celery_unit.app = app
 
     yield app
 
@@ -51,6 +45,7 @@ def failing_task_func(block_number: int):
 @pytest.fixture
 def setup_test_tasks():
     # Register test tasks using decorators
+    from abstract_block_dumper.decorators import block_task
 
     # every block
     block_task(condition=lambda bn: True)(every_block_task_func)

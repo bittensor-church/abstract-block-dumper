@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
+from celery import Task
 
 from abstract_block_dumper.exceptions import ConditionEvaluationError
 
@@ -13,10 +14,10 @@ logger = structlog.getLogger(__name__)
 @dataclass
 class RegistryItem:
     condition: Callable[..., bool]
-    function: Callable[..., Any]
+    function: Task
     args: list[dict[str, Any]] | None = None
     backfilling_lookback: int | None = None
-    celery_kwargs: dict[str, Any] | None = field(default_factory=dict)
+    celery_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def match_condition(self, block_number: int, **kwargs) -> bool:
         """
@@ -44,6 +45,9 @@ class RegistryItem:
         """
         Get the importable path to the function.
         """
+        if hasattr(self.function, "name") and self.function.name is not None:
+            return self.function.name
+
         return ".".join([self.function.__module__, self.function.__name__])
 
     def requires_backfilling(self) -> bool:
@@ -66,6 +70,10 @@ class BaseRegistry(abc.ABC):
     def clear(self) -> None:
         pass
 
+    @abc.abstractmethod
+    def get_by_executable_path(self, executable_path: str) -> RegistryItem | None:
+        pass
+
 
 class MemoryRegistry(BaseRegistry):
     _functions: list[RegistryItem] = []
@@ -85,6 +93,13 @@ class MemoryRegistry(BaseRegistry):
 
     def clear(self) -> None:
         self._functions = []
+
+    def get_by_executable_path(self, executable_path: str) -> RegistryItem:
+        for registry_item in self.get_functions():
+            if registry_item.executable_path == executable_path:
+                return registry_item
+        # TODO: Improve this
+        raise Exception("Function Not Found")
 
 
 task_registry = MemoryRegistry()

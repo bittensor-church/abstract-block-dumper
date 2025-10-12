@@ -1,12 +1,15 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait
+from typing import Any
 
 import pytest
+from celery.result import EagerResult
 from django.conf import settings
 
-from abstract_block_dumper.executor import celery_unit
-from abstract_block_dumper.memory_registry import RegistryItem, task_registry
+from abstract_block_dumper.decorators import block_task
+from abstract_block_dumper.memory_registry import task_registry
 from abstract_block_dumper.models import TaskAttempt
+from abstract_block_dumper.utils import get_executable_path
 
 
 def simple_task(block_number: int) -> str:
@@ -16,33 +19,25 @@ def simple_task(block_number: int) -> str:
 @pytest.mark.skipif("sqlite" in settings.DATABASES["default"]["ENGINE"], reason="SQLite lacks proper row-level locking")
 @pytest.mark.django_db(transaction=True)
 def test_concurrent_celery_task_call() -> None:
-    registry_item = RegistryItem(
-        function=simple_task,
-        condition=lambda _bn: True,
-        args=None,
-        celery_kwargs=None,
-        backfilling_lookback=None,
+    current_block = 6000
+    block_task(condition=lambda bn: True)(simple_task)
+    task_attempt, _ = TaskAttempt.create_or_get_pending(
+        block_number=current_block, executable_path=get_executable_path(simple_task)
     )
-    block_number = 500
-    task_registry.register_item(registry_item)
-    task_attempt = TaskAttempt.objects.create(
-        block_number=block_number,
-        executable_path=registry_item.executable_path,
-    )
-
-    block_number = block_number
-
     N = 20
 
     barrier = threading.Barrier(N)
 
-    def celery_unit_call(i: int, task: TaskAttempt) -> None:
+    def celery_task_registry_call(i: int, task: TaskAttempt) -> Any | EagerResult | Any:
         barrier.wait()
-        return celery_unit(task.block_number, task.args_dict, task.executable_path)
+
+        registry_item = task_registry.get_by_executable_path(task.executable_path)
+        output = registry_item.function.delay(task.block_number)
+        print(output.result)
+        return output.result
 
     with ThreadPoolExecutor(max_workers=N) as exe:
-        thread_jobs = [exe.submit(celery_unit_call, i, task_attempt) for i in range(N)]
-
+        thread_jobs = [exe.submit(celery_task_registry_call, i, task_attempt) for i in range(N)]
         wait(thread_jobs)
 
     passed_jobs = sum(1 for job in thread_jobs if job.result())
@@ -50,4 +45,3 @@ def test_concurrent_celery_task_call() -> None:
 
     task_attempt.refresh_from_db()
     assert task_attempt.status == TaskAttempt.Status.SUCCESS
-    assert task_attempt.celery_task_id is None

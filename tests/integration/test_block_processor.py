@@ -2,7 +2,6 @@ from unittest.mock import patch
 
 import pytest
 
-from abstract_block_dumper.executor import celery_unit
 from abstract_block_dumper.models import TaskAttempt
 from abstract_block_dumper.scheduler import task_scheduler_factory
 
@@ -21,9 +20,6 @@ def test_complete_e2e_workflow(mock_get_bittensor_client, setup_test_tasks) -> N
     task_attempts = TaskAttempt.objects.filter(block_number=block_number)
 
     assert task_attempts.count() == 3
-
-    for task_attempt in task_attempts:
-        celery_unit(task_attempt.block_number, task_attempt.args_dict, task_attempt.executable_path)
 
     for task_attempt in task_attempts:
         task_attempt.refresh_from_db()

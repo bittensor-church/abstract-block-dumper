@@ -194,12 +194,6 @@ The package includes intelligent caching to improve performance:
 - **Bittensor Client Caching**: The bittensor client is cached indefinitely since network configuration doesn't change during runtime
 - **Active Netuids Caching**: Active netuids are cached for 5 minutes by default to reduce network calls
 
-You can manually clear caches if needed:
-```python
-from abstract_block_dumper.utils import clear_caches
-clear_caches()  # Clears both bittensor client and netuids caches
-```
-
 You can also customize the netuids cache duration:
 ```python
 from abstract_block_dumper.utils import get_all_active_netuids

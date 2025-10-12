@@ -1,10 +1,9 @@
-import importlib
 from collections.abc import Callable
 from functools import cache
-from typing import Any
 
 import bittensor as bt
 import structlog
+from celery import current_task
 from django.conf import settings
 
 logger = structlog.get_logger(__name__)
@@ -24,20 +23,19 @@ def get_bittensor_client() -> bt.Subtensor:
     return bt.subtensor(network=network)
 
 
-def clear_caches() -> None:
+def get_current_celery_task_id() -> str:
     """
-    Clear all cached data.
+    Get current celery task id
+    """
+    try:
+        celery_task_id = current_task.id
+    except Exception:
+        celery_task_id = ""
+    return str(celery_task_id)
 
-    Useful for testing or manual cache invalidation.
-    """
-    get_bittensor_client.cache_clear()
-    logger.info("Cleared all bittensor client and netuids caches")
 
-
-def load_function_from_path(function_path: str) -> Callable[..., Any]:
+def get_executable_path(func: Callable) -> str:
     """
-    Load a function from a module path.
+    Get executable path for the callable `func`
     """
-    module_path, func_name = function_path.rsplit(".", 1)
-    module = importlib.import_module(module_path)
-    return getattr(module, func_name)
+    return ".".join([func.__module__, func.__name__])
