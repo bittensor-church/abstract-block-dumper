@@ -68,7 +68,7 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
 
     with transaction.atomic():
         try:
-            task_attempt = TaskAttempt.objects.select_for_update().get(
+            task_attempt = TaskAttempt.objects.select_for_update(nowait=True).get(
                 block_number=block_number,
                 executable_path=executable_path,
                 args_json=abd_utils.serialize_args(kwargs),
@@ -80,11 +80,12 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
                 executable_path=executable_path,
             )
             raise CeleryTaskLocked("TaskAttempt not found - task may have been canceled directly")
-        except OperationalError:
+        except OperationalError as e:
             logger.info(
                 "Task already being processed by another worker",
                 block_number=block_number,
                 executable_path=executable_path,
+                operational_error=str(e),
             )
             raise CeleryTaskLocked("Task already being processed by another worker")
 

@@ -115,7 +115,7 @@ class BlockProcessor:
                 # Use atomic transaction to prevent race conditions
                 with transaction.atomic():
                     # Re-fetch with select_for_update to prevent concurrent modifications
-                    task_attempt = TaskAttempt.objects.select_for_update().get(id=task_attempt.id)
+                    task_attempt = TaskAttempt.objects.select_for_update(nowait=True).get(id=task_attempt.id)
 
                     # Verify task is still in FAILED state and ready for retry
                     if task_attempt.status == TaskAttempt.Status.SUCCESS:

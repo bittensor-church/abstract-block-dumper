@@ -9,6 +9,7 @@ from django.conf import settings
 import abstract_block_dumper.dal.django_dal as abd_dal
 from abstract_block_dumper.dal.memory_registry import task_registry
 from abstract_block_dumper.decorators import block_task
+from abstract_block_dumper.exceptions import CeleryTaskLocked
 from abstract_block_dumper.models import TaskAttempt
 from abstract_block_dumper.services.utils import get_executable_path
 
@@ -34,8 +35,10 @@ def test_concurrent_celery_task_call() -> None:
         barrier.wait()
 
         registry_item = task_registry.get_by_executable_path(task.executable_path)
-        output = registry_item.function.delay(task.block_number)
-        print(output.result)
+        try:
+            output = registry_item.function.delay(task.block_number)
+        except CeleryTaskLocked:
+            return None
         return output.result
 
     with ThreadPoolExecutor(max_workers=N) as exe:
