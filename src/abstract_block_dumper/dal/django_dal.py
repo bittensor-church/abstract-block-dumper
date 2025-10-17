@@ -16,7 +16,7 @@ def get_ready_to_retry_attempts() -> QuerySet[abd_models.TaskAttempt]:
         next_retry_at__lte=timezone.now(),
         attempt_count__lt=abd_utils.get_max_attempt_limit(),
     ).exclude(
-        status__in=[abd_models.TaskAttempt.Status.SUCCESS, abd_models.TaskAttempt.Status.SUCCESS],
+        status=abd_models.TaskAttempt.Status.SUCCESS,
     )
 
 
