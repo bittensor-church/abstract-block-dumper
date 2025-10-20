@@ -1,0 +1,123 @@
+services:
+  django:
+    build:
+      context: ..
+      dockerfile: example_project/Dockerfile
+    command: sh -c "uv run python manage.py migrate && uv run python manage.py create_admin && uv run python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app/example_project
+      - ../src:/app/src
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql://block_dumper:block_dumper123@postgres:5432/block_dumper
+
+  redis:
+    image: redis:6.2
+    ports:
+      - "6380:6379"
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=block_dumper
+      - POSTGRES_USER=block_dumper
+      - POSTGRES_PASSWORD=block_dumper123
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  celery:
+    build:
+      context: ..
+      dockerfile: example_project/Dockerfile
+    command: uv run celery -A example_project worker --loglevel=info
+    volumes:
+      - .:/app/example_project
+      - ../src:/app/src
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql://block_dumper:block_dumper123@postgres:5432/block_dumper
+
+  celery-beat:
+    build:
+      context: ..
+      dockerfile: example_project/Dockerfile
+    command: uv run celery -A example_project beat --loglevel=info
+    volumes:
+      - .:/app/example_project
+      - ../src:/app/src
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql://block_dumper:block_dumper123@postgres:5432/block_dumper
+
+  block-scheduler:
+    build:
+      context: ..
+      dockerfile: example_project/Dockerfile
+    command: uv run python manage.py block_tasks
+    volumes:
+      - .:/app/example_project
+      - ../src:/app/src
+    depends_on:
+      - redis
+      - postgres
+      - celery
+      - django
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql://block_dumper:block_dumper123@postgres:5432/block_dumper
+
+  flower:
+    build:
+      context: ..
+      dockerfile: example_project/Dockerfile
+    command: uv run celery -A example_project flower --port=5555
+    ports:
+      - "5555:5555"
+    volumes:
+      - .:/app/example_project
+      - ../src:/app/src
+    depends_on:
+      - redis
+      - celery
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+
+  test:
+    build:
+      context: ..
+      dockerfile: example_project/Dockerfile
+    command: sleep infinity
+    volumes:
+      - .:/app/example_project
+      - ../src:/app/src
+      - ../tests:/app/tests
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - COMPOSE_DB=True
+      - DATABASE_URL=postgresql://block_dumper:block_dumper123@postgres:5432/block_dumper
+    working_dir: /app
+
+volumes:
+  postgres_data:

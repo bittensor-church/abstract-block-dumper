@@ -37,9 +37,9 @@ def install(session: nox.Session, *groups, dev: bool = True, editable: bool = Fa
     if not editable:
         other_args.append("--no-editable")
     if no_self:
-        other_args.append("--no-self")
+        other_args.append("--no-dev")
     if no_default:
-        other_args.append("--no-default")
+        other_args.append("--no-default-groups")
     for group in groups:
         other_args.extend(["--group", group])
     session.run("uv", "sync", "--active", *other_args, external=True)
@@ -153,7 +153,7 @@ def lint(session):
 @nox.session(python=PYTHON_VERSIONS, tags=["test", "check"])
 @nox.parametrize("django", DJANGO_VERSIONS)
 def test(session, django: str):
-    install(session, "test")
+    install(session, "test", editable=True)
     session.run("pip", "install", f"django~={django}.0")
     session.run("pytest", "-vv", "-n", "auto", *session.posargs)
 

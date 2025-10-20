@@ -21,6 +21,10 @@ dynamic = [
     "version",
 ]
 dependencies = [
+    "bittensor>=9.10.1",
+    "celery>=5.5.3",
+    "django>=3.2,<6.0",
+    "structlog>=25.4.0",
 ]
 
 [project.urls]
@@ -41,9 +45,9 @@ version-file = "src/abstract_block_dumper/_version.py"
 
 [dependency-groups]
 test = [
+    "factory-boy",
     "freezegun",
     "pytest",
-    "pytest-apiver",
     "pytest-asyncio",
     "pytest-django",
     "pytest-xdist",
@@ -60,11 +64,16 @@ lint = [
 release = [
     "towncrier",
 ]
+dev = [
+    "pre-commit",
+    "pytest>=8.4.2",
+    "ruff>=0.13.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]  # allow for `import tests` in test files
 target_package_name = "abstract_block_dumper"  # required by pytest-apiver
-DJANGO_SETTINGS_MODULE="tests.settings"
+DJANGO_SETTINGS_MODULE = "tests.settings"
 
 [tool.ruff]
 line-length = 120
@@ -73,10 +82,10 @@ line-length = 120
 select = [
     "D",
     "E", "F", "I", "UP",
-    "TCH005",
+    "TC005",
 ]
 ignore = [
-    "D100", "D105", "D107", "D200", "D202", "D203", "D205", "D212", "D400", "D401", "D415",
+    "D100", "D105", "D106", "D107", "D200", "D202", "D203", "D205", "D212", "D400", "D401", "D415",
     "D101", "D102", "D103", "D104", # TODO remove once we have docstring for all public methods
 ]
 
@@ -133,9 +142,23 @@ name = "Infrastructure"
 showcontent = true
 
 [tool.mypy]
+plugins = ["mypy_django_plugin.main"]
+strict_optional = true
+exclude = [
+    "tests/",
+]
+
+[tool.django-stubs]
+django_settings_module = "tests.settings"
 
 [[tool.mypy.overrides]]
 module = [
+    "bittensor",
+    "bittensor.*",
+    "celery",
+    "celery.*",
+    "cloudpickle",
+    "cloudpickle.*",
     "nox",
     "pytest",
     "tests.*",

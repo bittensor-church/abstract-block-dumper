@@ -1,0 +1,33 @@
+[project]
+name = "example-project"
+version = "0.1.0"
+description = "Example project demonstrating abstract-block-dumper usage"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "celery>=5.5.3",
+    "django>=5.2.6",
+    "abstract-block-dumper",
+    "psycopg2-binary>=2.9.0",
+    "flower>=2.0.0",
+    "dj-database-url>=2.0.0",
+    "redis>=5.0.0",
+    "pytest>=8.4.2",
+    "pytest-django>=4.9.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.12",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+abstract-block-dumper = { path = "../", editable = true }
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "example_project.settings"
+pythonpath = ["."]
