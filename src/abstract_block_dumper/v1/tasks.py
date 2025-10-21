@@ -14,7 +14,7 @@ from django.utils import timezone
 from abstract_block_dumper.models import TaskAttempt
 
 
-@shared_task(name="abstract_block_dumper.cleanup_old_tasks")
+@shared_task(name="abstract_block_dumper.v1.cleanup_old_tasks")
 def cleanup_old_tasks(days: int = 7) -> dict[str, int | str]:
     """
     Delete all succeeded or unrecoverable failed tasks older than the specified number of days.
@@ -47,12 +47,12 @@ def cleanup_old_tasks(days: int = 7) -> dict[str, int | str]:
 
         Example cron (daily at 2 AM):
         0 2 * * * python manage.py shell -c \
-            "from abstract_block_dumper.tasks import cleanup_old_tasks; cleanup_old_tasks.delay()"
+            "from abstract_block_dumper.v1.tasks import cleanup_old_tasks; cleanup_old_tasks.delay()"
 
         Example Celery beat schedule (in settings.py):
         CELERY_BEAT_SCHEDULE = {
             'cleanup-old-tasks': {
-                'task': 'abstract_block_dumper.cleanup_old_tasks',
+                'task': 'abstract_block_dumper.v1.cleanup_old_tasks',
                 'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
                 'kwargs': {'days': 7},
             },

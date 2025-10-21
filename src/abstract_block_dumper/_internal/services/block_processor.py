@@ -1,12 +1,12 @@
 import structlog
 from django.db import transaction
 
-import abstract_block_dumper.dal.django_dal as abd_dal
-from abstract_block_dumper.dal.memory_registry import BaseRegistry, RegistryItem, task_registry
-from abstract_block_dumper.exceptions import ConditionEvaluationError
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
+from abstract_block_dumper._internal.dal.memory_registry import BaseRegistry, RegistryItem, task_registry
+from abstract_block_dumper._internal.exceptions import ConditionEvaluationError
+from abstract_block_dumper._internal.services.executor import CeleryExecutor
+from abstract_block_dumper._internal.services.utils import serialize_args
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.services.executor import CeleryExecutor
-from abstract_block_dumper.services.utils import serialize_args
 
 logger = structlog.get_logger(__name__)
 
@@ -170,6 +170,7 @@ class BlockProcessor:
     def _cleanup_phantom_tasks(self) -> None:
         """
         Clean up tasks marked as SUCCESS but never actually started.
+
         Only removes tasks that were created recently (within last hour) to avoid
         deleting legitimate tasks marked as success by external processes.
         """

@@ -6,12 +6,12 @@ import pytest
 from celery.result import EagerResult
 from django.conf import settings
 
-import abstract_block_dumper.dal.django_dal as abd_dal
-from abstract_block_dumper.api.v0.decorators import block_task
-from abstract_block_dumper.dal.memory_registry import task_registry
-from abstract_block_dumper.exceptions import CeleryTaskLocked
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
+from abstract_block_dumper._internal.dal.memory_registry import task_registry
+from abstract_block_dumper._internal.exceptions import CeleryTaskLockedError
+from abstract_block_dumper._internal.services.utils import get_executable_path
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.services.utils import get_executable_path
+from abstract_block_dumper.v1.decorators import block_task
 
 
 def simple_task(block_number: int) -> str:
@@ -37,7 +37,7 @@ def test_concurrent_celery_task_call() -> None:
         registry_item = task_registry.get_by_executable_path(task.executable_path)
         try:
             output = registry_item.function.delay(task.block_number)
-        except CeleryTaskLocked:
+        except CeleryTaskLockedError:
             return None
         return output.result
 

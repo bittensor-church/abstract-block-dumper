@@ -1,9 +1,9 @@
 import pytest
 
-import abstract_block_dumper.dal.django_dal as abd_dal
-import abstract_block_dumper.services.utils as abd_utils
-from abstract_block_dumper.dal.memory_registry import task_registry
-from abstract_block_dumper.discovery import ensure_modules_loaded
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
+import abstract_block_dumper._internal.services.utils as abd_utils
+from abstract_block_dumper._internal.dal.memory_registry import task_registry
+from abstract_block_dumper._internal.discovery import ensure_modules_loaded
 from abstract_block_dumper.models import TaskAttempt
 from tests.conftest import every_block_task_func
 

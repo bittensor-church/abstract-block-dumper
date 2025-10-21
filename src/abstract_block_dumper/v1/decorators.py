@@ -5,10 +5,10 @@ import structlog
 from celery import Task, shared_task
 from django.db import OperationalError, transaction
 
-import abstract_block_dumper.dal.django_dal as abd_dal
-import abstract_block_dumper.services.utils as abd_utils
-from abstract_block_dumper.dal.memory_registry import RegistryItem, task_registry
-from abstract_block_dumper.exceptions import CeleryTaskLocked
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
+import abstract_block_dumper._internal.services.utils as abd_utils
+from abstract_block_dumper._internal.dal.memory_registry import RegistryItem, task_registry
+from abstract_block_dumper._internal.exceptions import CeleryTaskLockedError
 from abstract_block_dumper.models import TaskAttempt
 
 logger = structlog.get_logger(__name__)
@@ -78,7 +78,7 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
                 block_number=block_number,
                 executable_path=executable_path,
             )
-            raise CeleryTaskLocked("TaskAttempt not found - task may have been canceled directly")
+            raise CeleryTaskLockedError("TaskAttempt not found - task may have been canceled directly")
         except OperationalError as e:
             logger.info(
                 "Task already being processed by another worker",
@@ -86,7 +86,7 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
                 executable_path=executable_path,
                 operational_error=str(e),
             )
-            raise CeleryTaskLocked("Task already being processed by another worker")
+            raise CeleryTaskLockedError("Task already being processed by another worker")
 
         if task_attempt.status != TaskAttempt.Status.PENDING:
             logger.info(

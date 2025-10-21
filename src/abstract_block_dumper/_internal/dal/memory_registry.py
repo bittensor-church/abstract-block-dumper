@@ -6,7 +6,7 @@ from typing import Any
 import structlog
 from celery import Task
 
-from abstract_block_dumper.exceptions import ConditionEvaluationError
+from abstract_block_dumper._internal.exceptions import ConditionEvaluationError
 
 logger = structlog.getLogger(__name__)
 
@@ -19,10 +19,8 @@ class RegistryItem:
     backfilling_lookback: int | None = None
     celery_kwargs: dict[str, Any] = field(default_factory=dict)
 
-    def match_condition(self, block_number: int, **kwargs) -> bool:
-        """
-        Check if condition matches for given block and arguments
-        """
+    def match_condition(self, block_number: int, **kwargs: dict[str, Any]) -> bool:
+        """Check if condition matches for given block and arguments."""
         try:
             return self.condition(block_number, **kwargs)
         except Exception as e:
@@ -35,25 +33,19 @@ class RegistryItem:
             raise ConditionEvaluationError(f"Failed to evaluate condition: {e}") from e
 
     def get_execution_args(self) -> list[dict[str, Any]]:
-        """
-        Get list of argument sets for execution
-        """
+        """Get list of argument sets for execution."""
         return self.args or [{}]
 
     @property
     def executable_path(self) -> str:
-        """
-        Get the importable path to the function.
-        """
+        """Get the importable path to the function."""
         if hasattr(self.function, "name") and self.function.name is not None:
             return self.function.name
 
         return ".".join([self.function.__module__, self.function.__name__])
 
     def requires_backfilling(self) -> bool:
-        """
-        Check if this item requires backfilling.
-        """
+        """Check if this item requires backfilling."""
         return self.backfilling_lookback is not None
 
 

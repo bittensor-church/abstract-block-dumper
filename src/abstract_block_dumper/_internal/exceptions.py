@@ -10,7 +10,7 @@ class ConditionEvaluationError(AbstractBlockDumperError):
     pass
 
 
-class CeleryTaskLocked(Exception):
+class CeleryTaskLockedError(AbstractBlockDumperError):
     """Celery task execution is locked"""
 
     pass

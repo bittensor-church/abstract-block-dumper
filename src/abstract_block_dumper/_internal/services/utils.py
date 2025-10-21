@@ -20,14 +20,12 @@ def get_bittensor_client() -> bt.Subtensor:
     """
     DEFAULT_BITTENSOR_NETWORK = "finney"
     network = getattr(settings, "BITTENSOR_NETWORK", DEFAULT_BITTENSOR_NETWORK)
-    logger.info(f"Creating new bittensor client for network: {network}")
+    logger.info("Creating new bittensor client for network", network=network)
     return bt.subtensor(network=network)
 
 
 def get_current_celery_task_id() -> str:
-    """
-    Get current celery task id
-    """
+    """Get current celery task id."""
     try:
         celery_task_id = current_task.id
     except Exception:
@@ -36,9 +34,7 @@ def get_current_celery_task_id() -> str:
 
 
 def get_executable_path(func: Callable) -> str:
-    """
-    Get executable path for the callable `func`
-    """
+    """Get executable path for the callable `func`."""
     return ".".join([func.__module__, func.__name__])
 
 

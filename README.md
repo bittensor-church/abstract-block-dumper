@@ -4,6 +4,22 @@
 This package provides a simplified framework for creating block processing tasks in Django applications.
 Define tasks with lambda conditions using the @block_task decorator and run them asynchronously with Celery.
 
+## Usage
+
+> [!IMPORTANT]
+> This package uses [ApiVer](#versioning), make sure to import `abstract_block_dumper.v1`.
+
+
+## Versioning
+
+This package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+TL;DR you are safe to use [compatible release version specifier](https://packaging.python.org/en/latest/specifications/version-specifiers/#compatible-release) `~=MAJOR.MINOR` in your `pyproject.toml` or `requirements.txt`.
+
+Additionally, this package uses [ApiVer](https://www.youtube.com/watch?v=FgcoAKchPjk) to further reduce the risk of breaking changes.
+This means, the public API of this package is explicitly versioned, e.g. `abstract_block_dumper.v1`, and will not change in a backwards-incompatible way even when `abstract_block_dumper.v2` is released.
+
+Internal packages, i.e. prefixed by `abstract_block_dumper._` do not share these guarantees and may change in a backwards-incompatible way at any time even in patch releases.
+
 ## Implementation Details
 
 ### General Workflow:
@@ -71,7 +87,7 @@ Create block processing tasks in `tasks.py` or `block_tasks.py` file inside any 
 ### 3. Start the Block Scheduler
 Run the scheduler to start processing blocks:
 ```bash
-$ python manage.py block_tasks
+$ python manage.py block_tasks_v1
 ```
 
 This command will:
@@ -90,7 +106,7 @@ See examples below:
 Use the `@block_task` decorator with lambda conditions to create block processing tasks:
 
 ```python
-from abstract_block_dumper.api.v0.decorators import block_task
+from abstract_block_dumper.api.v1.decorators import block_task
 
 
 # Process every block
@@ -122,7 +138,7 @@ def process_multi_netuid_task(block_number: int, netuid: int):
 The framework provides a maintenance task to clean up old task records and maintain database performance:
 
 ```python
-from abstract_block_dumper.tasks import cleanup_old_tasks
+from abstract_block_dumper.v1.tasks import cleanup_old_tasks
 
 # Delete tasks older than 7 days (default)
 cleanup_old_tasks.delay()
@@ -138,13 +154,13 @@ This task deletes all succeeded or unrecoverable failed tasks older than the spe
 **Option 1: Manual Execution**
 ```bash
 # Using Django shell
-python manage.py shell -c "from abstract_block_dumper.tasks import cleanup_old_tasks; cleanup_old_tasks.delay()"
+python manage.py shell -c "from abstract_block_dumper.v1.tasks import cleanup_old_tasks; cleanup_old_tasks.delay()"
 ```
 
 **Option 2: Cron Job (Recommended - once per day)**
 ```bash
 # Add to crontab (daily at 2 AM)
-0 2 * * * cd /path/to/your/project && python manage.py shell -c "from abstract_block_dumper.tasks import cleanup_old_tasks; cleanup_old_tasks.delay()"
+0 2 * * * cd /path/to/your/project && python manage.py shell -c "from abstract_block_dumper.v1.tasks import cleanup_old_tasks; cleanup_old_tasks.delay()"
 ```
 
 **Option 3: Celery Beat (Automated Scheduling)**

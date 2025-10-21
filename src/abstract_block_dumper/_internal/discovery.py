@@ -11,7 +11,7 @@ def ensure_modules_loaded() -> None:
 
     @block_task must be loaded, otherwise it won't be registered.
     """
-    from django.apps import apps
+    from django.apps import apps  # noqa: PLC0415
 
     for app_config in apps.get_app_configs():
         for module_suffix in ["tasks", "block_tasks"]:

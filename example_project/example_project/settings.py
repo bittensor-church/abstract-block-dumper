@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import dj_database_url  # type: ignore
+from celery.schedules import crontab
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -133,3 +134,12 @@ BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds - ultra-fast polling for real-time pro
 BLOCK_DUMPER_START_FROM_BLOCK = "current"  # None = resume from DB, 'current' = current block, or block number
 BLOCK_TASK_RETRY_BACKOFF = 2
 BLOCK_DUMPER_MAX_ATTEMPTS = 3
+
+
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-old-tasks": {
+        "task": "abstract_block_dumper.cleanup_old_tasks",
+        "schedule": crontab(hour=2, minute=0),  # Daily at 2 AM
+        "kwargs": {"days": 7},  # Customize retention period
+    },
+}
