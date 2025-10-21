@@ -8,3 +8,7 @@ This project uses [*towncrier*](https://towncrier.readthedocs.io/) and the chang
 upcoming release can be found in [changelog.d](changelog.d).
 
 <!-- towncrier release notes start -->
+
+## [0.0.1](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.0.1) - 2025-10-21
+
+No significant changes.
