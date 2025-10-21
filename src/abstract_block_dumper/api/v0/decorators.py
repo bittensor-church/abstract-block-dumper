@@ -20,7 +20,6 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
 
     Task must already be in FAILED state with next_retry_at set by mark_failed()
     """
-
     if not task_attempt.next_retry_at:
         logger.error(
             "Cannot schedule retry without next_retry_at",
@@ -146,7 +145,7 @@ def block_task(
     celery_kwargs: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     """
-    Decorator for registering block tasks.
+    Register a block task.
 
     Args:
         condition: Lambda function that determines when to execute

@@ -1,8 +1,8 @@
 import pytest
 
 import abstract_block_dumper.dal.django_dal as abd_dal
+from abstract_block_dumper.api.v0.decorators import block_task
 from abstract_block_dumper.dal.memory_registry import task_registry
-from abstract_block_dumper.decorators import block_task
 from abstract_block_dumper.models import TaskAttempt
 from abstract_block_dumper.services.utils import get_executable_path
 

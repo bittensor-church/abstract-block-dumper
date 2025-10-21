@@ -90,7 +90,7 @@ See examples below:
 Use the `@block_task` decorator with lambda conditions to create block processing tasks:
 
 ```python
-from abstract_block_dumper.decorators import block_task
+from abstract_block_dumper.api.v0.decorators import block_task
 
 
 # Process every block

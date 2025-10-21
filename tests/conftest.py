@@ -45,7 +45,7 @@ def failing_task_func(block_number: int):
 @pytest.fixture
 def setup_test_tasks():
     # Register test tasks using decorators
-    from abstract_block_dumper.decorators import block_task
+    from abstract_block_dumper.api.v0.decorators import block_task
 
     # every block
     block_task(condition=lambda bn: True)(every_block_task_func)
