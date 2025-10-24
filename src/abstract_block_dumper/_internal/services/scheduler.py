@@ -4,9 +4,9 @@ import bittensor as bt
 import structlog
 from django.conf import settings
 
-import abstract_block_dumper.dal.django_dal as abd_dal
-import abstract_block_dumper.services.utils as abd_utils
-from abstract_block_dumper.services.block_processor import BlockProcessor, block_processor_factory
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
+import abstract_block_dumper._internal.services.utils as abd_utils
+from abstract_block_dumper._internal.services.block_processor import BlockProcessor, block_processor_factory
 
 logger = structlog.get_logger(__name__)
 

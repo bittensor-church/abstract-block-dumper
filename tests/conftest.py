@@ -3,7 +3,7 @@ import pytest
 from celery import Celery
 from django.conf import settings
 
-from abstract_block_dumper.dal.memory_registry import task_registry
+from abstract_block_dumper._internal.dal.memory_registry import task_registry
 
 from .django_fixtures import *  # noqa: F401, F403
 
@@ -45,7 +45,7 @@ def failing_task_func(block_number: int):
 @pytest.fixture
 def setup_test_tasks():
     # Register test tasks using decorators
-    from abstract_block_dumper.decorators import block_task
+    from abstract_block_dumper.v1.decorators import block_task
 
     # every block
     block_task(condition=lambda bn: True)(every_block_task_func)

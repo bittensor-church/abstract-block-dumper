@@ -4,12 +4,12 @@ from unittest.mock import patch
 import pytest
 from django.utils import timezone
 
-import abstract_block_dumper.dal.django_dal as abd_dal
-import abstract_block_dumper.services.utils as abd_utils
-from abstract_block_dumper.dal.memory_registry import task_registry
-from abstract_block_dumper.decorators import block_task
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
+import abstract_block_dumper._internal.services.utils as abd_utils
+from abstract_block_dumper._internal.dal.memory_registry import task_registry
+from abstract_block_dumper._internal.services.block_processor import block_processor_factory
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.services.block_processor import block_processor_factory
+from abstract_block_dumper.v1.decorators import block_task
 from tests.fatories import TaskAttemptFactory
 
 

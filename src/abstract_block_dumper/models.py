@@ -3,7 +3,7 @@ from typing import Any
 
 from django.db import models
 
-import abstract_block_dumper.services.utils as abd_utils
+import abstract_block_dumper._internal.services.utils as abd_utils
 
 
 class TaskAttempt(models.Model):

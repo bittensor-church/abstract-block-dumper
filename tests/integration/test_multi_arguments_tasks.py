@@ -1,10 +1,10 @@
 import pytest
 
-import abstract_block_dumper.dal.django_dal as abd_dal
-from abstract_block_dumper.dal.memory_registry import task_registry
-from abstract_block_dumper.decorators import block_task
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
+from abstract_block_dumper._internal.dal.memory_registry import task_registry
+from abstract_block_dumper._internal.services.utils import get_executable_path
 from abstract_block_dumper.models import TaskAttempt
-from abstract_block_dumper.services.utils import get_executable_path
+from abstract_block_dumper.v1.decorators import block_task
 
 
 def multi_arg_task(block_number: int, netuid: int, custom_param: str) -> str:

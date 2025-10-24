@@ -6,8 +6,8 @@ from django.db import transaction
 from django.db.models.query import QuerySet
 from django.utils import timezone
 
+import abstract_block_dumper._internal.services.utils as abd_utils
 import abstract_block_dumper.models as abd_models
-import abstract_block_dumper.services.utils as abd_utils
 
 
 def get_ready_to_retry_attempts() -> QuerySet[abd_models.TaskAttempt]:
@@ -76,7 +76,7 @@ def task_mark_as_success(task: abd_models.TaskAttempt, result_data: dict) -> Non
     task.save()
 
 
-def task_mark_as_failed(task) -> None:
+def task_mark_as_failed(task: abd_models.TaskAttempt) -> None:
     DEFAULT_BLOCK_TASK_RETRY_BACKOFF = 1
     MAX_RETRY_DELAY_MINUTES = 1440  # 24 hours max delay
 
@@ -98,7 +98,7 @@ def task_mark_as_failed(task) -> None:
     task.save()
 
 
-def task_schedule_to_retry(task):
+def task_schedule_to_retry(task: abd_models.TaskAttempt) -> None:
     task.status = abd_models.TaskAttempt.Status.PENDING
     task.save()
 
@@ -110,6 +110,7 @@ def task_create_or_get_pending(
 ) -> tuple[abd_models.TaskAttempt, bool]:
     """
     Create or get a pending task attempt.
+
     Returns (task, created) where created indicates if a new task was created.
 
     For failed tasks that can retry:

@@ -69,7 +69,7 @@ services:
     build:
       context: ..
       dockerfile: example_project/Dockerfile
-    command: uv run python manage.py block_tasks
+    command: uv run python manage.py block_tasks_v1
     volumes:
       - .:/app/example_project
       - ../src:/app/src

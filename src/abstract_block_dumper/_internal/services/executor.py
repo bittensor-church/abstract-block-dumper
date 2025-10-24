@@ -2,8 +2,8 @@ from typing import Any
 
 import structlog
 
-import abstract_block_dumper.dal.django_dal as abd_dal
-from abstract_block_dumper.dal.memory_registry import RegistryItem
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
+from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
 from abstract_block_dumper.models import TaskAttempt
 
 logger = structlog.get_logger(__name__)

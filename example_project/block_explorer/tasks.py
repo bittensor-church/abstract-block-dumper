@@ -1,4 +1,4 @@
-from abstract_block_dumper.decorators import block_task
+from abstract_block_dumper.v1.decorators import block_task
 
 
 @block_task(
