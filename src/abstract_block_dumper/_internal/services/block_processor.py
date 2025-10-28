@@ -100,22 +100,22 @@ class BlockProcessor:
         This handles tasks that may have been lost due to scheduler restarts.
         """
         retry_count = 0
-        for task_attempt in abd_dal.get_ready_to_retry_attempts():
+        for retry_attempt in abd_dal.get_ready_to_retry_attempts():
             try:
                 # Find the registry item to get celery_kwargs
-                registry_item = self.registry.get_by_executable_path(task_attempt.executable_path)
+                registry_item = self.registry.get_by_executable_path(retry_attempt.executable_path)
                 if not registry_item:
                     logger.warning(
                         "Registry item not found for failed task, skipping retry recovery",
-                        task_id=task_attempt.id,
-                        executable_path=task_attempt.executable_path,
+                        task_id=retry_attempt.id,
+                        executable_path=retry_attempt.executable_path,
                     )
                     continue
 
                 # Use atomic transaction to prevent race conditions
                 with transaction.atomic():
                     # Re-fetch with select_for_update to prevent concurrent modifications
-                    task_attempt = TaskAttempt.objects.select_for_update(nowait=True).get(id=task_attempt.id)
+                    task_attempt = TaskAttempt.objects.select_for_update(nowait=True).get(id=retry_attempt.id)
 
                     # Verify task is still in FAILED state and ready for retry
                     if task_attempt.status == TaskAttempt.Status.SUCCESS:
@@ -150,16 +150,16 @@ class BlockProcessor:
             except Exception:
                 logger.error(
                     "Failed to recover retry",
-                    task_id=task_attempt.id,
+                    task_id=retry_attempt.id,
                     exc_info=True,
                 )
                 # Reload task to see current state after potential execution failure
                 try:
-                    task_attempt.refresh_from_db()
+                    retry_attempt.refresh_from_db()
                     # If task is still PENDING after error, revert to FAILED
                     # (execution may have failed before celery task could mark it)
-                    if task_attempt.status == TaskAttempt.Status.PENDING:
-                        abd_dal.revert_to_failed(task_attempt)
+                    if retry_attempt.status == TaskAttempt.Status.PENDING:
+                        abd_dal.revert_to_failed(retry_attempt)
                 except TaskAttempt.DoesNotExist:
                     # Task was deleted during recovery, nothing to revert
                     pass

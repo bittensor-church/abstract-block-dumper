@@ -61,18 +61,20 @@ class TaskScheduler:
         logger.info("TaskScheduler stopped.")
 
     def initialize_last_block(self) -> None:
-        start_from_block_setting = getattr(settings, "BLOCK_DUMPER_START_FROM_BLOCK")
+        # Safe getattr in case setting is not defined
+        start_from_block_setting = getattr(settings, "BLOCK_DUMPER_START_FROM_BLOCK", None)
 
         if start_from_block_setting is not None:
             if start_from_block_setting == "current":
                 self.last_processed_block = self.subtensor.get_current_block()
-                logger.info(f"Starting from current blockchain block {self.last_processed_block}")
+                logger.info("Starting from current blockchain block", block_number=self.last_processed_block)
 
             elif isinstance(start_from_block_setting, int):
                 self.last_processed_block = start_from_block_setting
-                logger.info(f"Starting from configured block {self.last_processed_block}")
+                logger.info("Starting from configured block", block_number=self.last_processed_block)
             else:
-                raise ValueError(f"Invalid BLOCK_DUMPER_START_FROM_BLOCK value: {start_from_block_setting}")
+                error_msg = f"Invalid BLOCK_DUMPER_START_FROM_BLOCK value: {start_from_block_setting}"
+                raise ValueError(error_msg)
         else:
             # Default behavior - resume from database
             last_block_number = abd_dal.get_the_latest_executed_block_number()
