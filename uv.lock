@@ -42,7 +42,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "bittensor", specifier = ">=9.10.1" },
-    { name = "celery", specifier = ">=5.5.3" },
+    { name = "celery", specifier = ">=5.3" },
     { name = "django", specifier = ">=3.2,<6.0" },
     { name = "structlog", specifier = ">=25.4.0" },
 ]
