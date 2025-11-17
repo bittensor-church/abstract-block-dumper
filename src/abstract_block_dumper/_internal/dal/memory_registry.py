@@ -30,7 +30,8 @@ class RegistryItem:
                 block_number=block_number,
                 exc_info=True,
             )
-            raise ConditionEvaluationError(f"Failed to evaluate condition: {e}") from e
+            msg = f"Failed to evaluate condition: {e}"
+            raise ConditionEvaluationError(msg) from e
 
     def get_execution_args(self) -> list[dict[str, Any]]:
         """Get list of argument sets for execution."""
@@ -42,7 +43,7 @@ class RegistryItem:
         if hasattr(self.function, "name") and self.function.name is not None:
             return self.function.name
 
-        return ".".join([self.function.__module__, self.function.__name__])
+        return f"{self.function.__module__}.{self.function.__name__}"
 
     def requires_backfilling(self) -> bool:
         """Check if this item requires backfilling."""
@@ -76,7 +77,7 @@ class MemoryRegistry(BaseRegistry):
             "Registered function",
             function_name=item.function.__name__,
             executable_path=item.executable_path,
-            args=item.args,
+            args_counter=len(item.args or []),
             backfilling_lookback=item.backfilling_lookback,
         )
 
@@ -86,12 +87,11 @@ class MemoryRegistry(BaseRegistry):
     def clear(self) -> None:
         self._functions = []
 
-    def get_by_executable_path(self, executable_path: str) -> RegistryItem:
+    def get_by_executable_path(self, executable_path: str) -> RegistryItem | None:
         for registry_item in self.get_functions():
             if registry_item.executable_path == executable_path:
                 return registry_item
-        # TODO: Improve this
-        raise Exception("Function Not Found")
+        return None
 
 
 task_registry = MemoryRegistry()

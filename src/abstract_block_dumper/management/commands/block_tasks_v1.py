@@ -9,6 +9,9 @@ class Command(BaseCommand):
     help = "Run the block scheduler daemon."
 
     def handle(self, *args, **options) -> None:
+        """
+        Handle the management command to start the block scheduler.
+        """
         self.stdout.write("Syncing decorated functions...")
         ensure_modules_loaded()
         functions_counter = len(task_registry.get_functions())

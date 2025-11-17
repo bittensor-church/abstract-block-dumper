@@ -76,6 +76,28 @@ INSTALLED_APPS = [
 python manage.py migrate
 ```
 
+4. **Configure Celery to discover block tasks:**
+
+In your project's `celery.py` file, add the following to ensure Celery workers can discover your `@block_task` decorated functions:
+
+```python
+from celery import Celery
+from celery.signals import worker_ready
+from django.conf import settings
+
+app = Celery('your_project')
+app.config_from_object('django.conf:settings', namespace='CELERY')
+app.autodiscover_tasks()
+
+@worker_ready.connect
+def on_worker_ready(**kwargs):
+    """Load block tasks when worker starts."""
+    from abstract_block_dumper.v1.celery import setup_celery_tasks
+    setup_celery_tasks()
+```
+
+> **Important:** Without this step, Celery workers will not recognize your `@block_task` decorated functions, and you'll see "Received unregistered task" errors.
+
 ## Usage
 
 ### 1. Define Block Processing Tasks
@@ -106,7 +128,7 @@ See examples below:
 Use the `@block_task` decorator with lambda conditions to create block processing tasks:
 
 ```python
-from abstract_block_dumper.api.v1.decorators import block_task
+from abstract_block_dumper.v1.decorators import block_task
 
 
 # Process every block

@@ -62,7 +62,9 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
     )
 
 
-def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | None:
+def _celery_task_wrapper(
+    func: Callable[..., Any], block_number: int, **kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
     executable_path = abd_utils.get_executable_path(func)
 
     with transaction.atomic():
@@ -72,21 +74,15 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
                 executable_path=executable_path,
                 args_json=abd_utils.serialize_args(kwargs),
             )
-        except TaskAttempt.DoesNotExist:
-            logger.warning(
-                "TaskAttempt not found - task may have been canceled directly",
-                block_number=block_number,
-                executable_path=executable_path,
-            )
-            raise CeleryTaskLockedError("TaskAttempt not found - task may have been canceled directly")
+        except TaskAttempt.DoesNotExist as exc:
+            msg = "TaskAttempt not found - task may have been canceled directly"
+            logger.warning(msg, block_number=block_number, executable_path=executable_path)
+            raise CeleryTaskLockedError(msg) from exc
+
         except OperationalError as e:
-            logger.info(
-                "Task already being processed by another worker",
-                block_number=block_number,
-                executable_path=executable_path,
-                operational_error=str(e),
-            )
-            raise CeleryTaskLockedError("Task already being processed by another worker")
+            msg = "Task already being processed by another worker"
+            logger.info(msg, block_number=block_number, executable_path=executable_path, operational_error=str(e))
+            raise CeleryTaskLockedError(msg) from e
 
         if task_attempt.status != TaskAttempt.Status.PENDING:
             logger.info(
@@ -117,11 +113,11 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
             logger.info("Task completed successfully", task_id=task_attempt.id)
             return {"result": result}
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "Task execution failed",
                 task_id=task_attempt.id,
                 error_type=type(e).__name__,
-                exc_info=True,
+                error_message=str(e),
             )
             abd_dal.task_mark_as_failed(task_attempt)
 
@@ -130,10 +126,9 @@ def _celery_task_wrapper(func, block_number: int, **kwargs) -> dict[str, Any] | 
         try:
             schedule_retry(task_attempt)
         except Exception:
-            logger.error(
+            logger.exception(
                 "Failed to schedule retry",
                 task_id=task_attempt.id,
-                exc_info=True,
             )
     return None
 
@@ -173,10 +168,11 @@ def block_task(
 
     def decorator(func: Callable[..., Any]) -> Any:
         if not callable(condition):
-            raise ValueError("condition must be a callable.")
+            msg = "condition must be a callable."
+            raise TypeError(msg)
 
         # Celery task wrapper
-        def shared_celery_task(block_number: int, **kwargs) -> None | Any:
+        def shared_celery_task(block_number: int, **kwargs: dict[str, Any]) -> None | Any:
             """
             Wrapper that handles TaskAttempt tracking and executed the original
             function
@@ -193,13 +189,13 @@ def block_task(
         )(shared_celery_task)
 
         # Store original function referefence for introspection
-        celery_task._original_func = func
+        celery_task._original_func = func  # noqa: SLF001
 
         # Register the Celery task
         task_registry.register_item(
             RegistryItem(
                 condition=condition,
-                function=cast(Task, celery_task),
+                function=cast("Task", celery_task),
                 args=args,
                 backfilling_lookback=backfilling_lookback,
                 celery_kwargs=celery_kwargs or {},
