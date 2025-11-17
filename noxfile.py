@@ -18,6 +18,7 @@ MAIN_BRANCH_NAME = "master"
 PYTHON_VERSIONS = ["3.11", "3.12"]
 PYTHON_DEFAULT_VERSION = PYTHON_VERSIONS[-1]
 DJANGO_VERSIONS = ["3.2", "4.2"]
+CELERY_VERSIONS = ["5.3", "5.4", "5.5"]
 DEMO_APP_DIR = ROOT / "demo"
 
 nox.options.default_venv_backend = "venv"
@@ -152,9 +153,11 @@ def lint(session):
 
 @nox.session(python=PYTHON_VERSIONS, tags=["test", "check"])
 @nox.parametrize("django", DJANGO_VERSIONS)
-def test(session, django: str):
+@nox.parametrize("celery", CELERY_VERSIONS)
+def test(session, django: str, celery: str):
     install(session, "test", editable=True)
     session.run("pip", "install", f"django~={django}.0")
+    session.run("pip", "install", f"celery~={celery}.0")
     session.run("pytest", "-vv", "-n", "auto", *session.posargs)
 
 
