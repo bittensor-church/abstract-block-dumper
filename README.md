@@ -82,18 +82,21 @@ In your project's `celery.py` file, add the following to ensure Celery workers c
 
 ```python
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import celeryd_init
 from django.conf import settings
 
 app = Celery('your_project')
 app.config_from_object('django.conf:settings', namespace='CELERY')
 app.autodiscover_tasks()
 
-@worker_ready.connect
-def on_worker_ready(**kwargs):
-    """Load block tasks when worker starts."""
+
+
+@celeryd_init.connect
+def on_worker_init(**kwargs) -> None:
+    """Load block tasks when worker initializes."""
     from abstract_block_dumper.v1.celery import setup_celery_tasks
     setup_celery_tasks()
+
 ```
 
 > **Important:** Without this step, Celery workers will not recognize your `@block_task` decorated functions, and you'll see "Received unregistered task" errors.
@@ -132,7 +135,7 @@ from abstract_block_dumper.v1.decorators import block_task
 
 
 # Process every block
-@block_task(condition=lambda bn: True)
+@block_task
 def process_every_block(block_number: int):
     print(f"Processing every block: {block_number}")
 

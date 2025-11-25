@@ -47,7 +47,7 @@ def test_task_execution_failure_and_retry():
         executable_path=executable_path,
     )
 
-    block_task(condition=lambda bn: True)(failing_task_func)
+    block_task()(failing_task_func)
 
     registry_item = task_registry.get_by_executable_path(task_attempt.executable_path)
     assert registry_item is not None
@@ -68,7 +68,6 @@ def test_process_backfill():
     backfill_amount = 10
 
     block_task(
-        condition=lambda bn: True,
         backfilling_lookback=backfill_amount,
     )(backfill_task)
 

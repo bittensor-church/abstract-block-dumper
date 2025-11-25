@@ -134,24 +134,39 @@ def _celery_task_wrapper(
 
 
 def block_task(
-    condition: Callable[..., bool],
+    func: Callable[..., Any] | None = None,
+    *,
+    condition: Callable[..., bool] | None = None,
     args: list[dict[str, Any]] | None = None,
     backfilling_lookback: int | None = None,
     celery_kwargs: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     """
-    Register a block task.
+    Decorator to register a function as a block task.
+
+    Block task is a function that will be executed conditionally on each new block.
+    The condition is a callable that takes the block number and any additional arguments,
+    and returns a boolean indicating whether to execute the task.
 
     Args:
-        condition: Lambda function that determines when to execute
+        func: The function to decorate (used when decorator is applied without parentheses)
+        condition: Lambda function that determines when to execute the task. It should accept
+                   block_number and any additional args as parameters and return a boolean.
+                   Defaults to always True (run on every block).
         args: List of argument dictionaries for multi-execution
         backfilling_lookback: Number of blocks to backfill
         celery_kwargs: Additional Celery task parameters
 
     Examples:
-        @block_task(
-            condition=lambda bn: bn % 100 == 0
-        )
+        @block_task
+        def run_on_every_block(block_number: int):
+            pass
+
+        @block_task()
+        def also_runs_on_every_block(block_number: int):
+            pass
+
+        @block_task(condition=lambda bn: bn % 100 == 0)
         def simple_task(block_number: int):
             pass
 
@@ -165,9 +180,11 @@ def block_task(
             pass
 
     """
+    # Default condition: always run
+    effective_condition = condition if condition is not None else (lambda *_args, **_kwargs: True)
 
-    def decorator(func: Callable[..., Any]) -> Any:
-        if not callable(condition):
+    def decorator(fn: Callable[..., Any]) -> Any:
+        if not callable(effective_condition):
             msg = "condition must be a callable."
             raise TypeError(msg)
 
@@ -179,22 +196,22 @@ def block_task(
 
             This entire wrapper becomes a Celery task.
             """
-            return _celery_task_wrapper(func, block_number, **kwargs)
+            return _celery_task_wrapper(fn, block_number, **kwargs)
 
         # Wrap with celery shared_task
         celery_task = shared_task(
-            name=abd_utils.get_executable_path(func),
+            name=abd_utils.get_executable_path(fn),
             bind=False,
             **celery_kwargs or {},
         )(shared_celery_task)
 
         # Store original function referefence for introspection
-        celery_task._original_func = func  # noqa: SLF001
+        celery_task._original_func = fn  # noqa: SLF001
 
         # Register the Celery task
         task_registry.register_item(
             RegistryItem(
-                condition=condition,
+                condition=effective_condition,
                 function=cast("Task", celery_task),
                 args=args,
                 backfilling_lookback=backfilling_lookback,
@@ -203,4 +220,9 @@ def block_task(
         )
         return celery_task
 
+    # If func is provided, decorator was used without parentheses: @block_task
+    if func is not None:
+        return decorator(func)
+
+    # Otherwise, decorator was used with parentheses: @block_task() or @block_task(condition=...)
     return decorator

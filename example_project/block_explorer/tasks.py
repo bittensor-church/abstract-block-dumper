@@ -1,18 +1,37 @@
 from abstract_block_dumper.v1.decorators import block_task
 
 
-@block_task(
-    condition=lambda bn: True,
-)
-def process_every_block(block_number: int, netuid: int | None = None):
+@block_task
+def process_every_block(block_number: int, netuid: int | None = None) -> str:
+    """
+    Example task that processes every block.
+
+    Args:
+        block_number (int): The block number to process.
+        netuid (int | None): The NetUID to process, if applicable.
+
+    Returns:
+        str: A message indicating the block has been processed.
+
+    """
     return f"Processed block {block_number} for NetUID {netuid}"
 
 
 @block_task(
-    condition=lambda bn: True,
     backfilling_lookback=100,
 )
-def backfill_previous_100_blocks(block_number: int, netuid: int | None = None):
+def backfill_previous_100_blocks(block_number: int, netuid: int | None = None) -> str:
+    """
+    Example task that backfills the previous 100 blocks.
+
+    Args:
+        block_number (int): The block number to process.
+        netuid (int | None): The NetUID to process, if applicable.
+
+    Returns:
+        str: A message indicating the block has been processed.
+
+    """
     return f"Processed block {block_number} for NetUID {netuid}"
 
 

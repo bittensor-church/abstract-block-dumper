@@ -41,7 +41,7 @@ def test_task_failure_triggers_retry():
     executable_path = abd_utils.get_executable_path(failing_task)
     task_attempt, _ = abd_dal.task_create_or_get_pending(block_number, executable_path)
 
-    block_task(condition=lambda _bn: True)(failing_task)
+    block_task(failing_task)
 
     registry_item = task_registry.get_by_executable_path(executable_path)
 
@@ -68,7 +68,7 @@ def test_successful_retry_completes_task() -> None:
     executable_path = abd_utils.get_executable_path(flaky_function)
     task_attempt, _ = abd_dal.task_create_or_get_pending(current_block, executable_path)
 
-    block_task(lambda _bn: True)(flaky_function)
+    block_task(flaky_function)
 
     registry_item = task_registry.get_by_executable_path(executable_path)
     assert registry_item is not None
@@ -90,7 +90,7 @@ def test_restry_schedules_celery_task_with_eta():
     executable_path = abd_utils.get_executable_path(failing_task)
     task_attempt, _ = abd_dal.task_create_or_get_pending(current_block, executable_path)
 
-    block_task(condition=lambda _bn: True)(failing_task)
+    block_task(failing_task)
 
     registry_item = task_registry.get_by_executable_path(executable_path)
     assert registry_item is not None
@@ -137,7 +137,7 @@ def test_retry_recover_mechanism():
         size=batch_size, is_success=True, executable_path=executable_path, next_retry_at=past_time, attempt_count=1
     )
 
-    block_task(lambda _bn: True)(successful_task)
+    block_task(successful_task)
 
     task_registry.get_by_executable_path(executable_path)
 
