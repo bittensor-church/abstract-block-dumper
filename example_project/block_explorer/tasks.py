@@ -41,6 +41,6 @@ def backfill_previous_100_blocks(block_number: int, netuid: int | None = None) -
     backfilling_lookback=1000,
     celery_kwargs={"retry": True},
 )
-def subnet_analysis(block_number, netuid):
+def subnet_analysis(block_number, netuid) -> str:
     # Analyze subnet data
     return f"Processed block {block_number} for NetUID {netuid}"

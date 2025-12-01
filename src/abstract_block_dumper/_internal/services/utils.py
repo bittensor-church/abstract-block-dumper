@@ -1,6 +1,5 @@
 import json
 from collections.abc import Callable
-from functools import cache
 
 import bittensor as bt
 import structlog
@@ -10,16 +9,13 @@ from django.conf import settings
 logger = structlog.get_logger(__name__)
 
 
-@cache
-def get_bittensor_client() -> bt.Subtensor:
+def get_bittensor_client(network: str = "finney") -> bt.Subtensor:
     """
     Get a cached bittensor client.
 
     The client is cached indefinitely since network configuration
     doesn't change during runtime.
     """
-    DEFAULT_BITTENSOR_NETWORK = "finney"
-    network = getattr(settings, "BITTENSOR_NETWORK", DEFAULT_BITTENSOR_NETWORK)
     logger.info("Creating new bittensor client for network", network=network)
     return bt.subtensor(network=network)
 

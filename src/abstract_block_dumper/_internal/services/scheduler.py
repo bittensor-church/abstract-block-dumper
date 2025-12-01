@@ -10,19 +10,77 @@ from abstract_block_dumper._internal.services.block_processor import BlockProces
 
 logger = structlog.get_logger(__name__)
 
+# Blocks older than this threshold from current head require archive network
+ARCHIVE_BLOCK_THRESHOLD = 300
+
 
 class TaskScheduler:
     def __init__(
         self,
         block_processor: BlockProcessor,
-        subtensor: bt.Subtensor,
+        network: str,
         poll_interval: int,
     ) -> None:
         self.block_processor = block_processor
-        self.subtensor = subtensor
+        self.network = network
         self.poll_interval = poll_interval
         self.last_processed_block = -1
         self.is_running = False
+        self._subtensor: bt.Subtensor | None = None
+        self._archive_subtensor: bt.Subtensor | None = None
+        self._current_block_cache: int | None = None
+
+    @property
+    def subtensor(self) -> bt.Subtensor:
+        """Get the regular subtensor connection, creating it if needed."""
+        if self._subtensor is None:
+            self._subtensor = abd_utils.get_bittensor_client(self.network)
+        return self._subtensor
+
+    @subtensor.setter
+    def subtensor(self, value: bt.Subtensor | None) -> None:
+        """Set or reset the subtensor connection."""
+        self._subtensor = value
+
+    @property
+    def archive_subtensor(self) -> bt.Subtensor:
+        """Get the archive subtensor connection, creating it if needed."""
+        if self._archive_subtensor is None:
+            self._archive_subtensor = abd_utils.get_bittensor_client("archive")
+        return self._archive_subtensor
+
+    @archive_subtensor.setter
+    def archive_subtensor(self, value: bt.Subtensor | None) -> None:
+        """Set or reset the archive subtensor connection."""
+        self._archive_subtensor = value
+
+    def get_subtensor_for_block(self, block_number: int) -> bt.Subtensor:
+        """
+        Get the appropriate subtensor for the given block number.
+
+        Uses archive network for blocks older than ARCHIVE_BLOCK_THRESHOLD
+        from the current head.
+        """
+        if self._current_block_cache is None:
+            self._current_block_cache = self.subtensor.get_current_block()
+
+        blocks_behind = self._current_block_cache - block_number
+
+        if blocks_behind > ARCHIVE_BLOCK_THRESHOLD:
+            logger.debug(
+                "Using archive network for old block",
+                block_number=block_number,
+                blocks_behind=blocks_behind,
+            )
+            return self.archive_subtensor
+        return self.subtensor
+
+    def refresh_connections(self) -> None:
+        """Reset all subtensor connections to force re-establishment."""
+        self._subtensor = None
+        self._archive_subtensor = None
+        self._current_block_cache = None
+        logger.info("Subtensor connections reset")
 
     def start(self) -> None:
         self.is_running = True
@@ -40,13 +98,15 @@ class TaskScheduler:
                 # Process lost retries first
                 self.block_processor.recover_failed_retries()
 
-                current_block = self.subtensor.get_current_block()
+                # Update current block cache for archive network decision
+                self._current_block_cache = self.subtensor.get_current_block()
+                current_block = self._current_block_cache
 
                 for block_number in range(self.last_processed_block + 1, current_block + 1):
                     self.block_processor.process_block(block_number)
+                    time.sleep(self.poll_interval)
                     self.last_processed_block = block_number
 
-                time.sleep(self.poll_interval)
             except KeyboardInterrupt:
                 logger.info("TaskScheduler stopping due to KeyboardInterrupt.")
                 self.stop()
@@ -86,9 +146,16 @@ class TaskScheduler:
             )
 
 
-def task_scheduler_factory() -> TaskScheduler:
+def task_scheduler_factory(network: str = "finney") -> TaskScheduler:
+    """
+    Factory for TaskScheduler.
+
+    Args:
+        network (str): Bittensor network name. Defaults to "finney"
+
+    """
     return TaskScheduler(
         block_processor=block_processor_factory(),
-        subtensor=abd_utils.get_bittensor_client(),
+        network=network,
         poll_interval=getattr(settings, "BLOCK_DUMPER_POLL_INTERVAL", 1),
     )
