@@ -10,7 +10,9 @@ from abstract_block_dumper._internal.services.block_processor import BlockProces
 from abstract_block_dumper._internal.services.metrics import (
     BlockProcessingTimer,
     increment_blocks_processed,
+    set_block_lag,
     set_current_block,
+    set_registered_tasks,
 )
 
 logger = structlog.get_logger(__name__)
@@ -94,10 +96,13 @@ class TaskScheduler:
 
         self.initialize_last_block()
 
+        registered_tasks_count = len(self.block_processor.registry.get_functions())
+        set_registered_tasks(registered_tasks_count)
+
         logger.info(
             "TaskScheduler started",
             last_processed_block=self.last_processed_block,
-            registry_functions=len(self.block_processor.registry.get_functions()),
+            registry_functions=registered_tasks_count,
         )
 
         while self.is_running:
@@ -117,6 +122,7 @@ class TaskScheduler:
 
                         set_current_block("realtime", current_block)
                         increment_blocks_processed("realtime")
+                        set_block_lag("realtime", 0)  # Head-only mode has no lag
                         self.last_processed_block = current_block
 
                     time.sleep(self.poll_interval)
@@ -129,6 +135,7 @@ class TaskScheduler:
                         # Update metrics
                         set_current_block("realtime", block_number)
                         increment_blocks_processed("realtime")
+                        set_block_lag("realtime", current_block - block_number)
 
                         time.sleep(self.poll_interval)
                         self.last_processed_block = block_number

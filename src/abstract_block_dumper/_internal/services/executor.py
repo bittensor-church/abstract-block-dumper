@@ -4,6 +4,7 @@ import structlog
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
+from abstract_block_dumper._internal.services.metrics import increment_tasks_submitted
 from abstract_block_dumper.models import TaskAttempt
 
 logger = structlog.get_logger(__name__)
@@ -60,5 +61,9 @@ class CeleryExecutor:
         # Don't store AsyncResult to avoid memory accumulation during long runs
         # The task ID can be retrieved from the task_attempt if needed
         registry_item.function.apply_async(**apply_async_kwargs)
+
+        # Track task submission metric
+        task_name = registry_item.executable_path.split(".")[-1]
+        increment_tasks_submitted(task_name)
 
         logger.debug("Celery task scheduled", task_id=task_attempt.id)

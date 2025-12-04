@@ -1,4 +1,5 @@
 import inspect
+import time
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -10,6 +11,11 @@ import abstract_block_dumper._internal.dal.django_dal as abd_dal
 import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem, task_registry
 from abstract_block_dumper._internal.exceptions import CeleryTaskLockedError
+from abstract_block_dumper._internal.services.metrics import (
+    observe_task_execution_time,
+    record_task_execution,
+    record_task_retry,
+)
 from abstract_block_dumper.models import TaskAttempt
 
 logger = structlog.get_logger(__name__)
@@ -62,6 +68,10 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
         eta=task_attempt.next_retry_at,
     )
 
+    # Record retry metric
+    task_name = task_attempt.executable_path.split(".")[-1]
+    record_task_retry(task_name)
+
 
 def _celery_task_wrapper(
     func: Callable[..., Any], block_number: int, **kwargs: dict[str, Any]
@@ -102,10 +112,20 @@ def _celery_task_wrapper(
         abd_dal.task_mark_as_started(task_attempt, abd_utils.get_current_celery_task_id())
 
         # Start task execution
+        # Pass _use_archive_network only if the function accepts **kwargs
+        # Otherwise, strip it to avoid TypeError
+        execution_kwargs = {"block_number": block_number, **kwargs}
+
+        # Check if function accepts **kwargs before adding _use_archive_network
+        sig = inspect.signature(func)
+        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if has_var_keyword:
+            execution_kwargs["_use_archive_network"] = use_archive_network
+
+        task_name = executable_path.split(".")[-1]  # Get short task name
+        start_time = time.perf_counter()
+
         try:
-            # Pass _use_archive_network only if the function accepts **kwargs
-            # Otherwise, strip it to avoid TypeError
-            execution_kwargs = {"block_number": block_number, **kwargs}
             logger.info(
                 "Starting task execution",
                 task_id=task_attempt.id,
@@ -115,26 +135,31 @@ def _celery_task_wrapper(
                 use_archive_network=use_archive_network,
             )
 
-            # Check if function accepts **kwargs before adding _use_archive_network
-            sig = inspect.signature(func)
-            has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
-            if has_var_keyword:
-                execution_kwargs["_use_archive_network"] = use_archive_network
-
             result = func(**execution_kwargs)
+            execution_duration = time.perf_counter() - start_time
 
             abd_dal.task_mark_as_success(task_attempt, result)
 
-            logger.info("Task completed successfully", task_id=task_attempt.id)
+            # Record success metrics
+            record_task_execution(task_name, "success")
+            observe_task_execution_time(task_name, execution_duration)
+
+            logger.info("Task completed successfully", task_id=task_attempt.id, duration=execution_duration)
             return {"result": result}
         except Exception as e:
+            execution_duration = time.perf_counter() - start_time
             logger.exception(
                 "Task execution failed",
                 task_id=task_attempt.id,
                 error_type=type(e).__name__,
                 error_message=str(e),
+                duration=execution_duration,
             )
             abd_dal.task_mark_as_failed(task_attempt)
+
+            # Record failure metrics
+            record_task_execution(task_name, "failed")
+            observe_task_execution_time(task_name, execution_duration)
 
     # Schedule retry after transaction commits:
     if abd_dal.task_can_retry(task_attempt):

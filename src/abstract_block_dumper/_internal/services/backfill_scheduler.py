@@ -18,8 +18,10 @@ import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.services.block_processor import BlockProcessor, block_processor_factory
 from abstract_block_dumper._internal.services.metrics import (
     BlockProcessingTimer,
+    increment_archive_network_usage,
     increment_blocks_processed,
     set_backfill_progress,
+    set_block_lag,
     set_current_block,
 )
 from abstract_block_dumper._internal.services.utils import serialize_args
@@ -275,6 +277,10 @@ class BackfillScheduler:
                     set_backfill_progress(self.from_block, self.to_block, block_number)
                     increment_blocks_processed("backfill")
 
+                    # Track block lag (distance from chain head)
+                    if self._current_head_cache:
+                        set_block_lag("backfill", self._current_head_cache - block_number)
+
                     # Log progress periodically
                     if processed_count % PROGRESS_LOG_INTERVAL == 0:
                         progress_pct = (processed_count / total_blocks) * 100
@@ -380,6 +386,8 @@ class BackfillScheduler:
             try:
                 if registry_item.match_condition(block_number, **args):
                     use_archive = self._requires_archive_network(block_number)
+                    if use_archive:
+                        increment_archive_network_usage()
                     logger.debug(
                         "Backfilling block",
                         function_name=registry_item.function.__name__,

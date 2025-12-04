@@ -33,6 +33,15 @@ BACKFILL_PROGRESS = None
 BACKFILL_FROM_BLOCK = None
 BACKFILL_TO_BLOCK = None
 BLOCK_PROCESSING_TIME = None
+# Task-level metrics
+TASK_EXECUTIONS = None
+TASK_EXECUTION_TIME = None
+TASK_RETRIES = None
+# Business/observability metrics
+BLOCK_LAG = None  # How far behind the chain head
+PENDING_TASKS = None  # Current pending tasks count
+REGISTERED_TASKS = None  # Number of registered task types
+ARCHIVE_NETWORK_USAGE = None  # Counter for archive network fallback
 
 if PROMETHEUS_AVAILABLE:
     BLOCKS_PROCESSED = Counter(  # type: ignore
@@ -66,6 +75,41 @@ if PROMETHEUS_AVAILABLE:
         "block_dumper_block_processing_seconds",
         "Time spent processing each block",
         ["mode"],
+    )
+    # Task-level metrics
+    TASK_EXECUTIONS = Counter(  # type: ignore
+        "block_dumper_task_executions_total",
+        "Total task executions by status",
+        ["task_name", "status"],  # status: 'success', 'failed'
+    )
+    TASK_EXECUTION_TIME = Histogram(  # type: ignore
+        "block_dumper_task_execution_seconds",
+        "Time spent executing each task",
+        ["task_name"],
+        buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+    )
+    TASK_RETRIES = Counter(  # type: ignore
+        "block_dumper_task_retries_total",
+        "Total task retry attempts",
+        ["task_name"],
+    )
+    # Business/observability metrics
+    BLOCK_LAG = Gauge(  # type: ignore
+        "block_dumper_block_lag",
+        "Number of blocks behind the chain head",
+        ["mode"],  # 'realtime' or 'backfill'
+    )
+    PENDING_TASKS = Gauge(  # type: ignore
+        "block_dumper_pending_tasks",
+        "Current number of pending tasks in queue",
+    )
+    REGISTERED_TASKS = Gauge(  # type: ignore
+        "block_dumper_registered_tasks",
+        "Number of registered task types",
+    )
+    ARCHIVE_NETWORK_USAGE = Counter(  # type: ignore
+        "block_dumper_archive_network_requests_total",
+        "Total requests using archive network",
     )
 
 
@@ -103,6 +147,71 @@ def set_backfill_progress(from_block: int, to_block: int, current_block: int) ->
             processed = current_block - from_block
             progress = (processed / total_blocks) * 100
             BACKFILL_PROGRESS.set(progress)
+
+
+def set_block_lag(mode: str, lag: int) -> None:
+    """Set the current block lag (distance from chain head)."""
+    if PROMETHEUS_AVAILABLE and BLOCK_LAG is not None:
+        BLOCK_LAG.labels(mode=mode).set(lag)
+
+
+def set_pending_tasks(count: int) -> None:
+    """Set the current number of pending tasks."""
+    if PROMETHEUS_AVAILABLE and PENDING_TASKS is not None:
+        PENDING_TASKS.set(count)
+
+
+def set_registered_tasks(count: int) -> None:
+    """Set the number of registered task types."""
+    if PROMETHEUS_AVAILABLE and REGISTERED_TASKS is not None:
+        REGISTERED_TASKS.set(count)
+
+
+def increment_archive_network_usage() -> None:
+    """Increment the archive network usage counter."""
+    if PROMETHEUS_AVAILABLE and ARCHIVE_NETWORK_USAGE is not None:
+        ARCHIVE_NETWORK_USAGE.inc()
+
+
+def record_task_execution(task_name: str, status: str) -> None:
+    """Record a task execution with status (success/failed)."""
+    if PROMETHEUS_AVAILABLE and TASK_EXECUTIONS is not None:
+        TASK_EXECUTIONS.labels(task_name=task_name, status=status).inc()
+
+
+def record_task_retry(task_name: str) -> None:
+    """Record a task retry attempt."""
+    if PROMETHEUS_AVAILABLE and TASK_RETRIES is not None:
+        TASK_RETRIES.labels(task_name=task_name).inc()
+
+
+def observe_task_execution_time(task_name: str, duration: float) -> None:
+    """Record task execution duration in seconds."""
+    if PROMETHEUS_AVAILABLE and TASK_EXECUTION_TIME is not None:
+        TASK_EXECUTION_TIME.labels(task_name=task_name).observe(duration)
+
+
+class TaskExecutionTimer:
+    """Context manager for timing task execution."""
+
+    def __init__(self, task_name: str) -> None:
+        self.task_name = task_name
+        self._timer: Any = None
+
+    def __enter__(self) -> Self:
+        if PROMETHEUS_AVAILABLE and TASK_EXECUTION_TIME is not None:
+            self._timer = TASK_EXECUTION_TIME.labels(task_name=self.task_name).time()
+            self._timer.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        if self._timer is not None:
+            self._timer.__exit__(exc_type, exc_val, exc_tb)
 
 
 class BlockProcessingTimer:
