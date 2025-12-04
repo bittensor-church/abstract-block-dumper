@@ -23,15 +23,14 @@ class RegistryItem:
         """Check if condition matches for given block and arguments."""
         try:
             return self.condition(block_number, **kwargs)
-        except Exception as e:
-            logger.error(
+        except Exception as exc:
+            logger.exception(
                 "Condition evaluation failed",
                 condition=self.function.__name__,
                 block_number=block_number,
-                exc_info=True,
             )
-            msg = f"Failed to evaluate condition: {e}"
-            raise ConditionEvaluationError(msg) from e
+            msg = "Failed to evaluate condition"
+            raise ConditionEvaluationError(msg) from exc
 
     def get_execution_args(self) -> list[dict[str, Any]]:
         """Get list of argument sets for execution."""

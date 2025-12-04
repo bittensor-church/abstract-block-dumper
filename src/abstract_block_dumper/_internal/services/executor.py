@@ -10,7 +10,14 @@ logger = structlog.get_logger(__name__)
 
 
 class CeleryExecutor:
-    def execute(self, registry_item: RegistryItem, block_number: int, args: dict[str, Any]) -> None:
+    def execute(
+        self,
+        registry_item: RegistryItem,
+        block_number: int,
+        args: dict[str, Any],
+        *,
+        use_archive: bool = False,
+    ) -> None:
         task_attempt, created = abd_dal.task_create_or_get_pending(
             block_number=block_number,
             executable_path=registry_item.executable_path,
@@ -26,6 +33,7 @@ class CeleryExecutor:
 
         task_kwargs = {
             "block_number": block_number,
+            "_use_archive_network": use_archive,  # Runtime hint, not stored in DB
             **args,
         }
 
@@ -49,6 +57,8 @@ class CeleryExecutor:
             celery_kwargs=apply_async_kwargs,
         )
 
-        celery_task = registry_item.function.apply_async(**apply_async_kwargs)
+        # Don't store AsyncResult to avoid memory accumulation during long runs
+        # The task ID can be retrieved from the task_attempt if needed
+        registry_item.function.apply_async(**apply_async_kwargs)
 
-        logger.debug("Celery task scheduled", task_id=task_attempt.id, celery_task_id=celery_task.id)
+        logger.debug("Celery task scheduled", task_id=task_attempt.id)

@@ -4,7 +4,6 @@ import abstract_block_dumper._internal.dal.django_dal as abd_dal
 import abstract_block_dumper._internal.services.utils as abd_utils
 import abstract_block_dumper.models as abd_models
 from abstract_block_dumper._internal.dal.memory_registry import task_registry
-from abstract_block_dumper._internal.services.block_processor import block_processor_factory
 from abstract_block_dumper.v1.decorators import block_task
 from tests.conftest import every_block_task_func, failing_task_func
 from tests.fatories import TaskAttemptFactory
@@ -63,28 +62,36 @@ def test_task_execution_failure_and_retry():
 
 
 @pytest.mark.django_db
-def test_process_backfill():
+def test_backfill_via_backfill_scheduler():
+    """Test backfilling via BackfillScheduler (replaces removed process_backfill)."""
+    from unittest.mock import patch
+
+    from abstract_block_dumper._internal.services.backfill_scheduler import backfill_scheduler_factory
+
     current_block = 100
     backfill_amount = 10
+    from_block = current_block - backfill_amount
 
     block_task(
         backfilling_lookback=backfill_amount,
     )(backfill_task)
 
-    block_processor = block_processor_factory()
+    with patch("abstract_block_dumper._internal.services.utils.get_bittensor_client") as mock_client:
+        mock_client.return_value.get_current_block.return_value = 500
 
-    # Get backfilling registry item
-    registry_items = task_registry.get_functions()
-    backfill_item = registry_items[0]
+        # Use BackfillScheduler instead of process_backfill
+        scheduler = backfill_scheduler_factory(
+            from_block=from_block,
+            to_block=current_block - 1,  # exclusive of current_block
+            rate_limit=0,
+        )
+        scheduler.start()
 
-    # Backfilling process
-    block_processor.process_backfill(backfill_item, current_block)
-
-    # Backfilling tasks were created for blocks that match condition
+    # Backfilling tasks were created for blocks in range
     task_attempts = abd_models.TaskAttempt.objects.filter(
         executable_path__contains="backfill_task",
-        block_number__gte=current_block - backfill_amount,
-        block_number__lte=current_block,
+        block_number__gte=from_block,
+        block_number__lt=current_block,
     )
 
     assert task_attempts.count() == backfill_amount
