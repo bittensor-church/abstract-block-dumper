@@ -1,3 +1,5 @@
+import time
+
 import structlog
 from django.db import transaction
 
@@ -5,7 +7,6 @@ import abstract_block_dumper._internal.dal.django_dal as abd_dal
 from abstract_block_dumper._internal.dal.memory_registry import BaseRegistry, RegistryItem, task_registry
 from abstract_block_dumper._internal.exceptions import ConditionEvaluationError
 from abstract_block_dumper._internal.services.executor import CeleryExecutor
-from abstract_block_dumper._internal.services.utils import serialize_args
 from abstract_block_dumper.models import TaskAttempt
 
 logger = structlog.get_logger(__name__)
@@ -18,16 +19,15 @@ class BlockProcessor:
         self._cleanup_phantom_tasks()
 
     def process_block(self, block_number: int) -> None:
+        """Process a single block - executes registered tasks for this block only."""
         for registry_item in self.registry.get_functions():
             try:
-                self.process_backfill(registry_item, block_number)
                 self.process_registry_item(registry_item, block_number)
             except Exception:
-                logger.error(
+                logger.exception(
                     "Error processing registry item",
                     function_name=registry_item.function.__name__,
                     block_number=block_number,
-                    exc_info=True,
                 )
 
     def process_registry_item(self, registry_item: RegistryItem, block_number: int) -> None:
@@ -43,64 +43,28 @@ class BlockProcessor:
                 )
                 # Continue with other tasks
             except Exception:
-                logger.error("Unexpected error processing task", exc_info=True)
+                logger.exception("Unexpected error processing task")
 
-    def process_backfill(self, registry_item: RegistryItem, current_block: int) -> None:
-        if not registry_item.backfilling_lookback:
-            return None
-
-        start_block = max(0, current_block - registry_item.backfilling_lookback)
-
-        logger.info(
-            "Processing backfill",
-            function_name=registry_item.function.__name__,
-            start_block=start_block,
-            current_block=current_block,
-            lookback=registry_item.backfilling_lookback,
-        )
-
-        execution_args_list = registry_item.get_execution_args()
-
-        for args in execution_args_list:
-            args_json = serialize_args(args)
-
-            executed_blocks = abd_dal.executed_block_numbers(
-                registry_item.executable_path,
-                args_json,
-                start_block,
-                current_block,
-            )
-
-            for block_number in range(start_block, current_block):
-                if block_number in executed_blocks:
-                    continue
-
-                try:
-                    if registry_item.match_condition(block_number, **args):
-                        logger.debug(
-                            "Backfilling block",
-                            function_name=registry_item.function.__name__,
-                            block_number=block_number,
-                            args=args,
-                        )
-                        self.executor.execute(registry_item, block_number, args)
-                except Exception:
-                    logger.error(
-                        "Error during backfill",
-                        function_name=registry_item.function.__name__,
-                        block_number=block_number,
-                        args=args,
-                        exc_info=True,
-                    )
-
-    def recover_failed_retries(self) -> None:
+    def recover_failed_retries(self, poll_interval: int, batch_size: int | None = None) -> None:
         """
         Recover failed tasks that are ready to be retried.
 
         This handles tasks that may have been lost due to scheduler restarts.
+
+        Args:
+            poll_interval: Seconds to sleep between processing each retry.
+            batch_size: Maximum number of retries to process. If None, process all.
+
         """
         retry_count = 0
-        for retry_attempt in abd_dal.get_ready_to_retry_attempts():
+        retry_attempts = abd_dal.get_ready_to_retry_attempts()
+
+        # Apply batch size limit if specified
+        if batch_size is not None:
+            retry_attempts = retry_attempts[:batch_size]
+
+        for retry_attempt in retry_attempts:
+            time.sleep(poll_interval)
             try:
                 # Find the registry item to get celery_kwargs
                 registry_item = self.registry.get_by_executable_path(retry_attempt.executable_path)
@@ -148,10 +112,9 @@ class BlockProcessor:
                     attempt_count=task_attempt.attempt_count,
                 )
             except Exception:
-                logger.error(
+                logger.exception(
                     "Failed to recover retry",
                     task_id=retry_attempt.id,
-                    exc_info=True,
                 )
                 # Reload task to see current state after potential execution failure
                 try:

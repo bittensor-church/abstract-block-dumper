@@ -142,7 +142,7 @@ def test_retry_recover_mechanism():
     task_registry.get_by_executable_path(executable_path)
 
     block_processor = block_processor_factory()
-    block_processor.recover_failed_retries()
+    block_processor.recover_failed_retries(poll_interval=0)  # No delay for testing
 
     recover_ids = pending_attempt_ids + failed_attempt_ids
 

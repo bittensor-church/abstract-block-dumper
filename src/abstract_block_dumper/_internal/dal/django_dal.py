@@ -21,13 +21,19 @@ def get_ready_to_retry_attempts() -> QuerySet[abd_models.TaskAttempt]:
 
 
 def executed_block_numbers(executable_path: str, args_json: str, from_block: int, to_block: int) -> set[int]:
-    block_numbers = abd_models.TaskAttempt.objects.filter(
-        executable_path=executable_path,
-        args_json=args_json,
-        block_number__gte=from_block,
-        block_number__lt=to_block,
-        status=abd_models.TaskAttempt.Status.SUCCESS,
-    ).values_list("block_number", flat=True)
+    # Use iterator() to avoid Django's QuerySet caching which causes memory leaks
+    # during long-running backfill operations
+    block_numbers = (
+        abd_models.TaskAttempt.objects.filter(
+            executable_path=executable_path,
+            args_json=args_json,
+            block_number__gte=from_block,
+            block_number__lt=to_block,
+            status=abd_models.TaskAttempt.Status.SUCCESS,
+        )
+        .values_list("block_number", flat=True)
+        .iterator()
+    )
     return set(block_numbers)
 
 

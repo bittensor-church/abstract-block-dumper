@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -67,12 +68,18 @@ def _celery_task_wrapper(
 ) -> dict[str, Any] | None:
     executable_path = abd_utils.get_executable_path(func)
 
+    # Extract runtime hints that shouldn't be stored in DB
+    use_archive_network = kwargs.pop("_use_archive_network", False)
+
+    # Create db_kwargs without runtime hints for DB lookup
+    db_kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
+
     with transaction.atomic():
         try:
             task_attempt = TaskAttempt.objects.select_for_update(nowait=True).get(
                 block_number=block_number,
                 executable_path=executable_path,
-                args_json=abd_utils.serialize_args(kwargs),
+                args_json=abd_utils.serialize_args(db_kwargs),
             )
         except TaskAttempt.DoesNotExist as exc:
             msg = "TaskAttempt not found - task may have been canceled directly"
@@ -96,6 +103,8 @@ def _celery_task_wrapper(
 
         # Start task execution
         try:
+            # Pass _use_archive_network only if the function accepts **kwargs
+            # Otherwise, strip it to avoid TypeError
             execution_kwargs = {"block_number": block_number, **kwargs}
             logger.info(
                 "Starting task execution",
@@ -103,8 +112,14 @@ def _celery_task_wrapper(
                 block_number=block_number,
                 executable_path=executable_path,
                 celery_task_id=task_attempt.celery_task_id,
-                execution_kwargs=execution_kwargs,
+                use_archive_network=use_archive_network,
             )
+
+            # Check if function accepts **kwargs before adding _use_archive_network
+            sig = inspect.signature(func)
+            has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            if has_var_keyword:
+                execution_kwargs["_use_archive_network"] = use_archive_network
 
             result = func(**execution_kwargs)
 
