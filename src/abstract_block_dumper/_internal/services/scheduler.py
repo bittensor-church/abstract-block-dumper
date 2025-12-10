@@ -27,12 +27,10 @@ class TaskScheduler:
         block_processor: BlockProcessor,
         network: str,
         poll_interval: int,
-        realtime_head_only: bool = False,
     ) -> None:
         self.block_processor = block_processor
         self.network = network
         self.poll_interval = poll_interval
-        self.realtime_head_only = realtime_head_only
         self.last_processed_block = -1
         self.is_running = False
         self._subtensor: bt.Subtensor | None = None
@@ -114,31 +112,17 @@ class TaskScheduler:
                 self._current_block_cache = self.subtensor.get_current_block()
                 current_block = self._current_block_cache
 
-                if self.realtime_head_only:
-                    # Only process the current head block, skip if already processed
-                    if current_block != self.last_processed_block:
-                        with BlockProcessingTimer(mode="realtime"):
-                            self.block_processor.process_block(current_block)
+                # Only process the current head block, skip if already processed
+                if current_block != self.last_processed_block:
+                    with BlockProcessingTimer(mode="realtime"):
+                        self.block_processor.process_block(current_block)
 
-                        set_current_block("realtime", current_block)
-                        increment_blocks_processed("realtime")
-                        set_block_lag("realtime", 0)  # Head-only mode has no lag
-                        self.last_processed_block = current_block
+                    set_current_block("realtime", current_block)
+                    increment_blocks_processed("realtime")
+                    set_block_lag("realtime", 0)  # Head-only mode has no lag
+                    self.last_processed_block = current_block
 
-                    time.sleep(self.poll_interval)
-                else:
-                    # Original behavior: process all blocks from last_processed to current
-                    for block_number in range(self.last_processed_block + 1, current_block + 1):
-                        with BlockProcessingTimer(mode="realtime"):
-                            self.block_processor.process_block(block_number)
-
-                        # Update metrics
-                        set_current_block("realtime", block_number)
-                        increment_blocks_processed("realtime")
-                        set_block_lag("realtime", current_block - block_number)
-
-                        time.sleep(self.poll_interval)
-                        self.last_processed_block = block_number
+                time.sleep(self.poll_interval)
 
             except KeyboardInterrupt:
                 logger.info("TaskScheduler stopping due to KeyboardInterrupt.")
@@ -191,5 +175,4 @@ def task_scheduler_factory(network: str = "finney") -> TaskScheduler:
         block_processor=block_processor_factory(),
         network=network,
         poll_interval=getattr(settings, "BLOCK_DUMPER_POLL_INTERVAL", 1),
-        realtime_head_only=getattr(settings, "BLOCK_DUMPER_REALTIME_HEAD_ONLY", True),
     )

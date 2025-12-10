@@ -144,6 +144,9 @@ directory = "infrastructure"
 name = "Infrastructure"
 showcontent = true
 
+[tool.pyright]
+typeCheckingMode = "off"
+
 [tool.mypy]
 plugins = ["mypy_django_plugin.main"]
 strict_optional = true

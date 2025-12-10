@@ -17,7 +17,7 @@ def get_bittensor_client(network: str = "finney") -> bt.Subtensor:
     doesn't change during runtime.
     """
     logger.info("Creating new bittensor client for network", network=network)
-    return bt.subtensor(network=network)
+    return bt.Subtensor(network=network)
 
 
 def get_current_celery_task_id() -> str:

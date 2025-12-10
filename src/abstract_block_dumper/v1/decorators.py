@@ -74,7 +74,9 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
 
 
 def _celery_task_wrapper(
-    func: Callable[..., Any], block_number: int, **kwargs: dict[str, Any]
+    func: Callable[..., Any],
+    block_number: int,
+    **kwargs: dict[str, Any],
 ) -> dict[str, Any] | None:
     executable_path = abd_utils.get_executable_path(func)
 
