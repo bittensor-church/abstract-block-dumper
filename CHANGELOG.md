@@ -9,6 +9,11 @@ upcoming release can be found in [changelog.d](changelog.d).
 
 <!-- towncrier release notes start -->
 
+## [0.1.0](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.0) - 2025-12-10
+
+No significant changes.
+
+
 ## [0.0.9](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.0.9) - 2025-12-04
 
 No significant changes.
