@@ -1,4 +1,6 @@
+import itertools
 import time
+from typing import Protocol
 
 import structlog
 from django.db import transaction
@@ -10,6 +12,25 @@ from abstract_block_dumper._internal.services.executor import CeleryExecutor
 from abstract_block_dumper.models import TaskAttempt
 
 logger = structlog.get_logger(__name__)
+
+
+class BaseBlockProcessor(Protocol):
+    """Protocol defining the interface for block processors."""
+
+    executor: CeleryExecutor
+    registry: BaseRegistry
+
+    def process_block(self, block_number: int) -> None:
+        """Process a single block - executes registered tasks for this block only."""
+        ...
+
+    def process_registry_item(self, registry_item: RegistryItem, block_number: int) -> None:
+        """Process a single registry item for a given block."""
+        ...
+
+    def recover_failed_retries(self, poll_interval: int, batch_size: int | None = None) -> None:
+        """Recover failed tasks that are ready to be retried."""
+        ...
 
 
 class BlockProcessor:
@@ -59,9 +80,9 @@ class BlockProcessor:
         retry_count = 0
         retry_attempts = abd_dal.get_ready_to_retry_attempts()
 
-        # Apply batch size limit if specified
+        # Apply batch size limit if specified (use islice for iterator compatibility)
         if batch_size is not None:
-            retry_attempts = retry_attempts[:batch_size]
+            retry_attempts = itertools.islice(retry_attempts, batch_size)
 
         for retry_attempt in retry_attempts:
             time.sleep(poll_interval)
@@ -147,7 +168,7 @@ class BlockProcessor:
 def block_processor_factory(
     executor: CeleryExecutor | None = None,
     registry: BaseRegistry | None = None,
-) -> BlockProcessor:
+) -> BaseBlockProcessor:
     return BlockProcessor(
         executor=executor or CeleryExecutor(),
         registry=registry or task_registry,

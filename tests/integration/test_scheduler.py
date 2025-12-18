@@ -7,6 +7,7 @@ from django.utils import timezone
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
 import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.dal.memory_registry import task_registry
+from abstract_block_dumper._internal.providers.bittensor_client import BittensorConnectionClient
 from abstract_block_dumper._internal.services.block_processor import block_processor_factory
 from abstract_block_dumper.models import TaskAttempt
 from abstract_block_dumper.v1.decorators import block_task
@@ -151,3 +152,36 @@ def test_retry_recover_mechanism():
         status=TaskAttempt.Status.SUCCESS,
     )
     assert qs.count() == len(recover_ids)
+
+
+def test_bittensor_client_uses_archive_for_old_blocks(
+    mock_subtensor,
+    mock_archive_subtensor,
+) -> None:
+    """Test that BittensorConnectionClient uses archive_subtensor for blocks older than 300 from current head."""
+    current_block = 1000
+
+    client = BittensorConnectionClient(network="testnet")
+    client._subtensor = mock_subtensor
+    client._archive_subtensor = mock_archive_subtensor
+    client._current_block_cache = current_block
+
+    # For old block (400 behind), should return archive_subtensor
+    old_block = 600  # 400 blocks behind (> 300 threshold)
+    result = client.get_subtensor_for_block(old_block)
+    assert result is mock_archive_subtensor
+
+    # For recent block (within 300), should return regular subtensor
+    recent_block = 800  # 200 blocks behind (< 300 threshold)
+    result = client.get_subtensor_for_block(recent_block)
+    assert result is mock_subtensor
+
+    # For block exactly at threshold (300 behind), should return regular subtensor
+    threshold_block = 700  # exactly 300 blocks behind
+    result = client.get_subtensor_for_block(threshold_block)
+    assert result is mock_subtensor
+
+    # For block just over threshold (301 behind), should return archive_subtensor
+    just_over_threshold_block = 699  # 301 blocks behind
+    result = client.get_subtensor_for_block(just_over_threshold_block)
+    assert result is mock_archive_subtensor

@@ -15,7 +15,7 @@ import structlog
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
 import abstract_block_dumper._internal.services.utils as abd_utils
-from abstract_block_dumper._internal.services.block_processor import BlockProcessor, block_processor_factory
+from abstract_block_dumper._internal.services.block_processor import BaseBlockProcessor, block_processor_factory
 from abstract_block_dumper._internal.services.metrics import (
     BlockProcessingTimer,
     increment_archive_network_usage,
@@ -59,7 +59,7 @@ class BackfillScheduler:
 
     def __init__(
         self,
-        block_processor: BlockProcessor,
+        block_processor: BaseBlockProcessor,
         network: str,
         from_block: int,
         to_block: int,

@@ -1,8 +1,10 @@
+from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Max
 from django.db.models.query import QuerySet
 from django.utils import timezone
 
@@ -10,19 +12,21 @@ import abstract_block_dumper._internal.services.utils as abd_utils
 import abstract_block_dumper.models as abd_models
 
 
-def get_ready_to_retry_attempts() -> QuerySet[abd_models.TaskAttempt]:
-    return abd_models.TaskAttempt.objects.filter(
-        next_retry_at__isnull=False,
-        next_retry_at__lte=timezone.now(),
-        attempt_count__lt=abd_utils.get_max_attempt_limit(),
-    ).exclude(
-        status=abd_models.TaskAttempt.Status.SUCCESS,
+def get_ready_to_retry_attempts() -> Iterator[abd_models.TaskAttempt]:
+    return (
+        abd_models.TaskAttempt.objects.filter(
+            next_retry_at__isnull=False,
+            next_retry_at__lte=timezone.now(),
+            attempt_count__lt=abd_utils.get_max_attempt_limit(),
+        )
+        .exclude(
+            status=abd_models.TaskAttempt.Status.SUCCESS,
+        )
+        .iterator()
     )
 
 
 def executed_block_numbers(executable_path: str, args_json: str, from_block: int, to_block: int) -> set[int]:
-    # Use iterator() to avoid Django's QuerySet caching which causes memory leaks
-    # during long-running backfill operations
     block_numbers = (
         abd_models.TaskAttempt.objects.filter(
             executable_path=executable_path,
@@ -151,7 +155,5 @@ def task_create_or_get_pending(
 
 
 def get_the_latest_executed_block_number() -> int | None:
-    qs = abd_models.TaskAttempt.objects.order_by("-block_number").first()
-    if qs:
-        return qs.block_number
-    return None
+    result = abd_models.TaskAttempt.objects.aggregate(max_block=Max("block_number"))
+    return result["max_block"]
