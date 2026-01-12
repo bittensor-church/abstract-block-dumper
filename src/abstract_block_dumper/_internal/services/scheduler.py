@@ -2,7 +2,6 @@ import time
 from typing import Protocol
 
 import structlog
-from django import db
 from django.conf import settings
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
@@ -15,9 +14,6 @@ from abstract_block_dumper._internal.services.metrics import (
     set_current_block,
     set_registered_tasks,
 )
-
-# Refresh bittensor connections every N blocks to prevent memory leaks from internal caches
-CONNECTION_REFRESH_INTERVAL = 1000
 
 logger = structlog.get_logger(__name__)
 
@@ -42,6 +38,7 @@ class DefaultBlockStateResolver:
             return self.bittensor_client.subtensor.get_current_block()
         if isinstance(start_setting, int):
             return start_setting
+
         # Default: resume from DB or current
         return abd_dal.get_the_latest_executed_block_number() or self.bittensor_client.subtensor.get_current_block()
 
@@ -59,7 +56,6 @@ class TaskScheduler:
         self.bittensor_client = bittensor_client
         self.last_processed_block = state_resolver.get_starting_block()
         self.is_running = False
-        self._blocks_since_refresh = 0
 
     def start(self) -> None:
         self.is_running = True
@@ -86,11 +82,6 @@ class TaskScheduler:
                     increment_blocks_processed("realtime")
                     set_block_lag("realtime", 0)  # Head-only mode has no lag
                     self.last_processed_block = current_block
-                    self._blocks_since_refresh += 1
-
-                    # Periodic memory cleanup
-                    if self._blocks_since_refresh >= CONNECTION_REFRESH_INTERVAL:
-                        self._perform_cleanup()
 
                 time.sleep(self.poll_interval)
 
@@ -104,18 +95,8 @@ class TaskScheduler:
 
     def stop(self) -> None:
         self.is_running = False
+        self.bittensor_client.close()
         logger.info("TaskScheduler stopped.")
-
-    def _perform_cleanup(self) -> None:
-        """Perform periodic memory cleanup to prevent leaks in long-running processes."""
-        # Reset bittensor connections to clear internal caches
-        self.bittensor_client.refresh_connections()
-
-        # Clear Django's query log (only accumulates if DEBUG=True)
-        db.reset_queries()
-
-        self._blocks_since_refresh = 0
-        logger.debug("Memory cleanup performed", blocks_processed=CONNECTION_REFRESH_INTERVAL)
 
 
 def task_scheduler_factory(network: str = "finney") -> TaskScheduler:

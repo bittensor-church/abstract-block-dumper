@@ -1,7 +1,14 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import bittensor as bt
 import structlog
 
 import abstract_block_dumper._internal.services.utils as abd_utils
+
+if TYPE_CHECKING:
+    import types
 
 logger = structlog.get_logger(__name__)
 
@@ -13,6 +20,10 @@ ARCHIVE_BLOCK_THRESHOLD = 300
 class BittensorConnectionClient:
     """
     Manages connections to regular and archive Bittensor subtensor networks.
+
+    Supports context manager protocol for safe connection cleanup:
+        with BittensorConnectionClient(network="finney") as client:
+            block = client.subtensor.get_current_block()
     """
 
     def __init__(self, network: str) -> None:
@@ -20,6 +31,38 @@ class BittensorConnectionClient:
         self._subtensor: bt.Subtensor | None = None
         self._archive_subtensor: bt.Subtensor | None = None
         self._current_block_cache: int | None = None
+
+    def __enter__(self) -> BittensorConnectionClient:
+        """Context manager entry."""
+        return self
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc_val: BaseException | None,
+        _exc_tb: types.TracebackType | None,
+    ) -> None:
+        """Context manager exit - ensures connections are closed."""
+        self.close()
+
+    def close(self) -> None:
+        """Close all subtensor connections to prevent memory leaks."""
+        if self._subtensor is not None:
+            try:
+                self._subtensor.close()
+            except Exception:
+                logger.warning("Error closing subtensor connection", exc_info=True)
+            self._subtensor = None
+
+        if self._archive_subtensor is not None:
+            try:
+                self._archive_subtensor.close()
+            except Exception:
+                logger.warning("Error closing archive subtensor connection", exc_info=True)
+            self._archive_subtensor = None
+
+        self._current_block_cache = None
+        logger.debug("Subtensor connections closed")
 
     def get_for_block(self, block_number: int) -> bt.Subtensor:
         """Get the appropriate subtensor client for the given block number."""
@@ -71,8 +114,6 @@ class BittensorConnectionClient:
         return self.subtensor
 
     def refresh_connections(self) -> None:
-        """Reset all subtensor connections to force re-establishment."""
-        self._subtensor = None
-        self._archive_subtensor = None
-        self._current_block_cache = None
-        logger.info("Subtensor connections reset")
+        """Close and reset all subtensor connections to force re-establishment."""
+        self.close()
+        logger.info("Subtensor connections refreshed")

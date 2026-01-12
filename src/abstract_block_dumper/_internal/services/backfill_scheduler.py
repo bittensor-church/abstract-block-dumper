@@ -36,8 +36,6 @@ logger = structlog.get_logger(__name__)
 # Blocks older than this threshold from current head require archive network
 ARCHIVE_BLOCK_THRESHOLD = 300
 
-# Progress logging interval
-PROGRESS_LOG_INTERVAL = 100
 ARCHIVE_NETWORK = "archive"
 
 # Memory cleanup interval (every N blocks)
@@ -281,16 +279,13 @@ class BackfillScheduler:
                     if self._current_head_cache:
                         set_block_lag("backfill", self._current_head_cache - block_number)
 
-                    # Log progress periodically
-                    if processed_count % PROGRESS_LOG_INTERVAL == 0:
-                        progress_pct = (processed_count / total_blocks) * 100
-                        logger.info(
-                            "Backfill progress",
-                            processed=processed_count,
-                            total=total_blocks,
-                            progress_percent=f"{progress_pct:.1f}%",
-                            current_block=block_number,
-                        )
+                    # Log each block being processed
+                    progress_pct = (processed_count / total_blocks) * 100
+                    logger.info(
+                        "Backfilling block",
+                        block=block_number,
+                        progress=f"{processed_count}/{total_blocks} ({progress_pct:.1f}%)",
+                    )
 
                     # Rate limiting between block submissions
                     if block_number < self.to_block and self.rate_limit > 0:
