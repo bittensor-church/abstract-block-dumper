@@ -1,7 +1,7 @@
 import argparse
 import time
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import TypedDict, Unpack
 
 from django.core.management.base import BaseCommand
 
@@ -106,7 +106,7 @@ class Command(BaseCommand):
             help="Process all blocks in range instead of only gaps (original behavior)",
         )
 
-    def handle(self, **options: BackfillOptions) -> None:  # type: ignore[override]
+    def handle(self, **options: Unpack[BackfillOptions]) -> None:  # type: ignore[override]
         """
         Main command handler.
         """
