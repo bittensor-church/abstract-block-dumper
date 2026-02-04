@@ -4,7 +4,7 @@ from typing import Any
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Min
 from django.db.models.query import QuerySet
 from django.utils import timezone
 
@@ -157,3 +157,27 @@ def task_create_or_get_pending(
 def get_the_latest_executed_block_number() -> int | None:
     result = abd_models.TaskAttempt.objects.aggregate(max_block=Max("block_number"))
     return result["max_block"]
+
+
+def get_block_range() -> tuple[int | None, int | None]:
+    """Get the min and max block numbers from all task attempts."""
+    result = abd_models.TaskAttempt.objects.aggregate(
+        min_block=Min("block_number"),
+        max_block=Max("block_number"),
+    )
+    return result["min_block"], result["max_block"]
+
+
+def get_successful_block_numbers(from_block: int, to_block: int) -> set[int]:
+    """Get all block numbers with at least one successful task in the range."""
+    block_numbers = (
+        abd_models.TaskAttempt.objects.filter(
+            block_number__gte=from_block,
+            block_number__lte=to_block,
+            status=abd_models.TaskAttempt.Status.SUCCESS,
+        )
+        .values_list("block_number", flat=True)
+        .distinct()
+        .iterator()
+    )
+    return set(block_numbers)

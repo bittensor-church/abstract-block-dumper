@@ -20,5 +20,5 @@ def ensure_modules_loaded() -> None:
             except ModuleNotFoundError:
                 continue
             except ImportError as e:
-                logger.warning(f"Failed to import {app_config.name}.{module_suffix}: {e}")
+                logger.warning("Failed to import %s.%s: %s", app_config.name, module_suffix, e)
                 continue
