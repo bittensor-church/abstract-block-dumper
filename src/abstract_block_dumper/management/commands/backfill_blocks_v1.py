@@ -1,7 +1,7 @@
 import argparse
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TypedDict
 
 from django.core.management.base import BaseCommand
 
@@ -16,6 +16,17 @@ from abstract_block_dumper._internal.services.backfill_scheduler import (
 
 SECONDS_PER_HOUR = 3600
 SECONDS_PER_MINUTE = 60
+
+
+class BackfillOptions(TypedDict):
+    """Type definition for command options."""
+
+    from_block: int | None
+    to_block: int | None
+    rate_limit: float
+    network: str
+    dry_run: bool
+    no_gap_detection: bool
 
 
 @dataclass
@@ -95,7 +106,7 @@ class Command(BaseCommand):
             help="Process all blocks in range instead of only gaps (original behavior)",
         )
 
-    def handle(self, **options: dict[str, Any]) -> None:
+    def handle(self, **options: BackfillOptions) -> None:  # type: ignore[override]
         """
         Main command handler.
         """
@@ -141,9 +152,9 @@ class Command(BaseCommand):
 
         # Use gap detection by default
         if no_gap_detection:
-            self._handle_range_backfill(from_block, to_block, rate_limit, network, dry_run)
+            self._handle_range_backfill(from_block, to_block, rate_limit, network, dry_run=dry_run)
         else:
-            self._handle_gap_backfill(from_block, to_block, rate_limit, network, dry_run)
+            self._handle_gap_backfill(from_block, to_block, rate_limit, network, dry_run=dry_run)
 
     def _handle_gap_backfill(
         self,
