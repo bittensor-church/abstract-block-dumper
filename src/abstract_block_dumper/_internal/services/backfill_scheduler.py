@@ -63,6 +63,7 @@ class BackfillScheduler:
         to_block: int,
         rate_limit: float = 1.0,
         dry_run: bool = False,
+        executable_path: str | None = None,
     ) -> None:
         """
         Initialize the backfill scheduler.
@@ -74,6 +75,7 @@ class BackfillScheduler:
             to_block: Ending block number (inclusive).
             rate_limit: Seconds to sleep between processing each block.
             dry_run: If True, preview what would be processed without executing.
+            executable_path: Optional filter to only backfill a specific function.
 
         """
         self.block_processor = block_processor
@@ -82,10 +84,18 @@ class BackfillScheduler:
         self.to_block = to_block
         self.rate_limit = rate_limit
         self.dry_run = dry_run
+        self.executable_path = executable_path
         self.is_running = False
         self._subtensor: bt.Subtensor | None = None
         self._archive_subtensor: bt.Subtensor | None = None
         self._current_head_cache: int | None = None
+
+    def _get_registry_items(self) -> list[RegistryItem]:
+        """Get registry items, optionally filtered by executable_path."""
+        items = self._get_registry_items()
+        if self.executable_path:
+            items = [item for item in items if item.executable_path == self.executable_path]
+        return items
 
     @property
     def subtensor(self) -> bt.Subtensor:
@@ -172,7 +182,7 @@ class BackfillScheduler:
         """
         stats = DryRunStats(total_blocks=self.to_block - self.from_block + 1)
 
-        registry_items = self.block_processor.registry.get_functions()
+        registry_items = self._get_registry_items()
 
         # Pre-fetch all executed blocks for each registry item + args combination
         # This reduces N queries (one per block) to M queries (one per registry item + args)
@@ -319,7 +329,7 @@ class BackfillScheduler:
         """Pre-fetch all executed blocks for all registry items in the range."""
         cache: dict[tuple[str, str], set[int]] = {}
 
-        for registry_item in self.block_processor.registry.get_functions():
+        for registry_item in self._get_registry_items():
             for args in registry_item.get_execution_args():
                 args_json = serialize_args(args)
                 cache_key = (registry_item.executable_path, args_json)
@@ -339,7 +349,7 @@ class BackfillScheduler:
         executed_blocks_cache: dict[tuple[str, str], set[int]],
     ) -> None:
         """Process a single block during backfill."""
-        for registry_item in self.block_processor.registry.get_functions():
+        for registry_item in self._get_registry_items():
             try:
                 self._process_registry_item_for_backfill(
                     registry_item,
@@ -416,6 +426,7 @@ def backfill_scheduler_factory(
     network: str = "finney",
     rate_limit: float = 1.0,
     dry_run: bool = False,
+    executable_path: str | None = None,
 ) -> BackfillScheduler:
     """
     Factory for BackfillScheduler.
@@ -426,6 +437,7 @@ def backfill_scheduler_factory(
         network: Bittensor network name. Defaults to "finney".
         rate_limit: Seconds to sleep between blocks. Defaults to 1.0.
         dry_run: If True, preview without executing. Defaults to False.
+        executable_path: Optional filter to only backfill a specific function.
 
     Returns:
         Configured BackfillScheduler instance.
@@ -438,4 +450,5 @@ def backfill_scheduler_factory(
         to_block=to_block,
         rate_limit=rate_limit,
         dry_run=dry_run,
+        executable_path=executable_path,
     )

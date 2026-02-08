@@ -168,16 +168,27 @@ def get_block_range() -> tuple[int | None, int | None]:
     return result["min_block"], result["max_block"]
 
 
-def get_successful_block_numbers(from_block: int, to_block: int) -> set[int]:
-    """Get all block numbers with at least one successful task in the range."""
-    block_numbers = (
-        abd_models.TaskAttempt.objects.filter(
-            block_number__gte=from_block,
-            block_number__lte=to_block,
-            status=abd_models.TaskAttempt.Status.SUCCESS,
-        )
-        .values_list("block_number", flat=True)
-        .distinct()
-        .iterator()
+def get_successful_block_numbers(
+    from_block: int,
+    to_block: int,
+    executable_path: str | None = None,
+) -> set[int]:
+    """
+    Get all block numbers with at least one successful task in the range.
+
+    Args:
+        from_block: Start of block range (inclusive).
+        to_block: End of block range (inclusive).
+        executable_path: Optional filter for specific function.
+
+    """
+    queryset = abd_models.TaskAttempt.objects.filter(
+        block_number__gte=from_block,
+        block_number__lte=to_block,
+        status=abd_models.TaskAttempt.Status.SUCCESS,
     )
+    if executable_path:
+        queryset = queryset.filter(executable_path=executable_path)
+
+    block_numbers = queryset.values_list("block_number", flat=True).distinct().iterator()
     return set(block_numbers)

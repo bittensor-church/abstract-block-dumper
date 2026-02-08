@@ -27,6 +27,7 @@ class BackfillOptions(TypedDict):
     network: str
     dry_run: bool
     no_gap_detection: bool
+    function: str | None
 
 
 @dataclass
@@ -105,6 +106,12 @@ class Command(BaseCommand):
             action="store_true",
             help="Process all blocks in range instead of only gaps (original behavior)",
         )
+        parser.add_argument(
+            "--function",
+            type=str,
+            required=False,
+            help="Only backfill a specific function by executable path.",
+        )
 
     def handle(self, **options: Unpack[BackfillOptions]) -> None:  # type: ignore[override]
         """
@@ -116,16 +123,29 @@ class Command(BaseCommand):
         network = options["network"]
         dry_run = options["dry_run"]
         no_gap_detection = options["no_gap_detection"]
+        function = options["function"]
 
         # Load registered functions
         self.stdout.write("Syncing decorated functions...")
         ensure_modules_loaded()
-        functions_counter = len(task_registry.get_functions())
+        registered_functions = task_registry.get_functions()
+        functions_counter = len(registered_functions)
         self.stdout.write(self.style.SUCCESS(f"Synced {functions_counter} functions"))
 
         if functions_counter == 0:
             self.stderr.write(self.style.WARNING("No functions registered. Nothing to backfill."))
             return
+
+        # Validate function filter if provided
+        if function:
+            matching_function = task_registry.get_by_executable_path(function)
+            if matching_function is None:
+                self.stderr.write(self.style.ERROR(f"Function '{function}' not found in registry."))
+                self.stdout.write("Available functions:")
+                for item in registered_functions:
+                    self.stdout.write(f"  - {item.executable_path}")
+                return
+            self.stdout.write(f"Filtering to function: {function}")
 
         # Determine block range
         if from_block is None or to_block is None:
@@ -152,9 +172,9 @@ class Command(BaseCommand):
 
         # Use gap detection by default
         if no_gap_detection:
-            self._handle_range_backfill(from_block, to_block, rate_limit, network, dry_run=dry_run)
+            self._handle_range_backfill(from_block, to_block, rate_limit, network, dry_run=dry_run, function=function)
         else:
-            self._handle_gap_backfill(from_block, to_block, rate_limit, network, dry_run=dry_run)
+            self._handle_gap_backfill(from_block, to_block, rate_limit, network, dry_run=dry_run, function=function)
 
     def _handle_gap_backfill(
         self,
@@ -164,13 +184,14 @@ class Command(BaseCommand):
         network: str,
         *,
         dry_run: bool,
+        function: str | None,
     ) -> None:
         """Discover and process gaps in the block range."""
         self.stdout.write("")
         self.stdout.write("Discovering gaps in block range...")
 
         # Get all successfully processed blocks in the range
-        processed_blocks = abd_dal.get_successful_block_numbers(from_block, to_block)
+        processed_blocks = abd_dal.get_successful_block_numbers(from_block, to_block, function)
         total_blocks = to_block - from_block + 1
 
         self.stdout.write(f"Block range: {from_block} -> {to_block} ({total_blocks} blocks)")
@@ -197,11 +218,18 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         if dry_run:
-            self._handle_gap_dry_run(gaps, total_missing, rate_limit, network)
+            self._handle_gap_dry_run(gaps, total_missing, rate_limit, network, function)
         else:
-            self._handle_gap_execution(gaps, total_missing, rate_limit, network)
+            self._handle_gap_execution(gaps, total_missing, rate_limit, network, function)
 
-    def _handle_gap_dry_run(self, gaps: list[Gap], total_missing: int, rate_limit: float, network: str) -> None:
+    def _handle_gap_dry_run(
+        self,
+        gaps: list[Gap],
+        total_missing: int,
+        rate_limit: float,
+        network: str,
+        function: str | None,
+    ) -> None:
         """Handle dry-run mode for gap backfill."""
         self.stdout.write(self.style.WARNING("Dry-run mode: previewing gaps to backfill"))
         self.stdout.write("")
@@ -214,6 +242,7 @@ class Command(BaseCommand):
                 network=network,
                 rate_limit=rate_limit,
                 dry_run=True,
+                executable_path=function,
             )
             stats = scheduler.start()
             if stats:
@@ -228,7 +257,14 @@ class Command(BaseCommand):
             estimated_seconds = total_missing * rate_limit
             self._print_time_estimate(estimated_seconds, rate_limit)
 
-    def _handle_gap_execution(self, gaps: list[Gap], total_missing: int, rate_limit: float, network: str) -> None:
+    def _handle_gap_execution(
+        self,
+        gaps: list[Gap],
+        total_missing: int,
+        rate_limit: float,
+        network: str,
+        function: str | None,
+    ) -> None:
         """Execute backfill for all gaps."""
         self.stdout.write(f"Starting backfill of {len(gaps)} gap(s) with {total_missing} missing blocks")
         self.stdout.write(f"Rate limit: {rate_limit} seconds between blocks")
@@ -252,6 +288,7 @@ class Command(BaseCommand):
                     network=network,
                     rate_limit=rate_limit,
                     dry_run=False,
+                    executable_path=function,
                 )
                 scheduler.start()
                 blocks_processed += gap.size
@@ -275,6 +312,7 @@ class Command(BaseCommand):
         network: str,
         *,
         dry_run: bool,
+        function: str | None,
     ) -> None:
         """Handle backfill for the entire range (original behavior)."""
         scheduler = backfill_scheduler_factory(
@@ -283,6 +321,7 @@ class Command(BaseCommand):
             network=network,
             rate_limit=rate_limit,
             dry_run=dry_run,
+            executable_path=function,
         )
 
         total_blocks = to_block - from_block + 1

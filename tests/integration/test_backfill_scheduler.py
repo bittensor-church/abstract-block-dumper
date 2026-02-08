@@ -10,6 +10,7 @@ from abstract_block_dumper._internal.services.backfill_scheduler import (
     backfill_scheduler_factory,
 )
 from abstract_block_dumper.models import TaskAttempt
+from abstract_block_dumper.v1.decorators import block_task
 
 
 def simple_task_func(block_number: int):
@@ -20,7 +21,6 @@ def simple_task_func(block_number: int):
 @pytest.fixture
 def setup_backfill_tasks():
     """Register test tasks for backfill testing."""
-    from abstract_block_dumper.v1.decorators import block_task
 
     # every block
     block_task(condition=lambda bn: True)(simple_task_func)
