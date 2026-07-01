@@ -33,7 +33,7 @@ Register functions -> detect new blocks -> evaluate conditions -> send to Celery
 - Functions marked with @block_task decorators are stored in memory registry
 
 2. Detect Blocks
-- Scheduler is running by management command block_tasks
+- Scheduler is running by management command `block_tasks_v1`
 - Scheduler polls blockchain, finds new blocks, and batches them
 
 3. Plan Tasks
@@ -156,6 +156,56 @@ def process_multi_netuid_task(block_number: int, netuid: int):
 ```
 
 
+## Backfilling Missed Blocks
+
+Two mechanisms process blocks the live scheduler did not handle in real time.
+
+### 1. Per-task lookback (`backfilling_lookback`)
+
+Pass `backfilling_lookback=N` to `@block_task` to have the **live** scheduler keep the
+trailing `N`-block window filled for that task. On every new head block `H`, in addition
+to processing `H`, the scheduler (re)submits any block in `[H-N, H-1]` that this task has
+**not** already completed and that is **not** currently in flight, still respecting the
+task's `condition`. This self-heals gaps caused by scheduler downtime or skipped polls,
+bounded to at most `N` blocks of catch-up per head.
+
+```python
+# On each new head, also (re)fill the previous 300 blocks for this task
+@block_task(backfilling_lookback=300)
+def index_recent_blocks(block_number: int):
+    ...
+```
+
+Only tasks that declare `backfilling_lookback` are backfilled this way. Already-succeeded
+and in-flight (`PENDING`/`RUNNING`) blocks are skipped; failed blocks are retried subject
+to the normal retry backoff. The whole mechanism can be disabled globally with
+`BLOCK_DUMPER_LOOKBACK_ENABLED = False` (see [Configuration Options Reference](#configuration-options-reference)).
+
+### 2. Historical backfill command (`backfill_blocks_v1`)
+
+For large, one-off historical ranges, use the management command. By default it discovers
+**gaps** (blocks missing from the database) in the range and backfills only those; pass
+`--no-gap-detection` to process every block in the range.
+
+```bash
+# Backfill only the missing blocks (gaps) in a range
+python manage.py backfill_blocks_v1 --from-block 1000000 --to-block 1100000
+
+# Process the entire range, not just gaps
+python manage.py backfill_blocks_v1 --from-block 1000000 --to-block 1100000 --no-gap-detection
+
+# Preview what would be processed without executing anything
+python manage.py backfill_blocks_v1 --from-block 1000000 --to-block 1100000 --dry-run
+
+# Throttle submissions (seconds between blocks) and choose the network
+python manage.py backfill_blocks_v1 --from-block 1000000 --to-block 1100000 --rate-limit 0.5 --network finney
+```
+
+If `--from-block` / `--to-block` are omitted, they default to the min / max block already
+present in the database. Blocks older than ~300 from the current head are automatically
+fetched via the archive network.
+
+
 ## Maintenance Tasks
 
 ### Cleanup Old Task Attempts
@@ -224,6 +274,7 @@ CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'testnet', 'mainnet'
 BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
+BLOCK_DUMPER_LOOKBACK_ENABLED = True  # honor per-task backfilling_lookback (default True)
 BLOCK_TASK_RETRY_BACKOFF = 2  # minutes for retry backoff base
 BLOCK_DUMPER_MAX_ATTEMPTS = 3  # maximum retry attempts
 BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 1440  # maximum retry delay (24 hours)
@@ -234,7 +285,11 @@ BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 1440  # maximum retry delay (24 hours)
 ### `BITTENSOR_NETWORK`
 - **Type:** `str`
 - **Default:** `'finney'`
-- **Description:** Specifies which [Bittensor network](https://docs.learnbittensor.org/concepts/bittensor-networks) to connect to
+- **Description:** Which [Bittensor network](https://docs.learnbittensor.org/concepts/bittensor-networks) the live scheduler (`block_tasks_v1`) connects to. The historical `backfill_blocks_v1` command overrides this per run via its `--network` flag.
+
+```python
+BITTENSOR_NETWORK = 'finney'
+```
 
 ---
 
@@ -257,7 +312,7 @@ BLOCK_DUMPER_START_FROM_BLOCK = 'current'
 
 ### `BLOCK_DUMPER_POLL_INTERVAL`
 - **Type:** `int`
-- **Default:** `1`
+- **Default:** `5`
 - **Valid Range:** `1` to `3600` (seconds)
 - **Description:** Seconds to wait between checking for new blocks
 
@@ -269,6 +324,17 @@ BLOCK_DUMPER_POLL_INTERVAL = 5
 > - Lower values (1-2s): Near real-time processing, higher CPU/network usage
 > - Higher values (10-60s): Reduced load but delayed processing
 > - Very low values (<1s): May cause rate limiting
+
+---
+
+### `BLOCK_DUMPER_LOOKBACK_ENABLED`
+- **Type:** `bool`
+- **Default:** `True`
+- **Description:** Global kill-switch for per-task lookback backfilling in the live scheduler. When `True`, tasks that declare `backfilling_lookback=N` have their trailing `N`-block window backfilled on every head advance (see [Backfilling Missed Blocks](#backfilling-missed-blocks)). Set to `False` to disable this behavior for all tasks without changing task code.
+
+```python
+BLOCK_DUMPER_LOOKBACK_ENABLED = True
+```
 
 ---
 
@@ -322,7 +388,7 @@ BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 720  # 12 hours max
 The repository includes a complete working example in the `example_project/` directory that demonstrates:
 
 - Django application setup with abstract-block-dumper
-- Multiple task types (`@every_block`, `@every_n_blocks` with different configurations)
+- Multiple task types defined with `@block_task` (every-block, conditional, multi-netuid, and `backfilling_lookback`)
 - Error handling with a randomly failing task
 - Docker Compose setup with all required services
 - Monitoring with Flower (Celery monitoring tool)

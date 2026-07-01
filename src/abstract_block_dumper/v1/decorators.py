@@ -196,7 +196,12 @@ def block_task(
                    block_number and any additional args as parameters and return a boolean.
                    Defaults to always True (run on every block).
         args: List of argument dictionaries for multi-execution
-        backfilling_lookback: Number of blocks to backfill
+        backfilling_lookback: If set to N, the live scheduler keeps the trailing N-block
+                   window filled for this task: on every new head block H it also
+                   (re)submits any block in [H-N, H-1] that has not already completed and
+                   is not currently in flight, still respecting ``condition``. Defaults to
+                   None (no lookback backfilling). Globally gated by the
+                   ``BLOCK_DUMPER_LOOKBACK_ENABLED`` Django setting.
         celery_kwargs: Additional Celery task parameters
 
     Examples:
