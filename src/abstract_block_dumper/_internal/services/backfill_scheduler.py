@@ -332,6 +332,8 @@ class BackfillScheduler:
         executed_blocks_cache: dict[tuple[str, str], set[int]],
     ) -> None:
         """Process a registry item for backfill - only submits if not already executed."""
+        # When the head is unknown, fall back to block_number so the archive delta is 0
+        # (never archive), matching the removed _requires_archive_network's None behavior.
         head_block = self._current_head_cache if self._current_head_cache is not None else block_number
         for args in registry_item.get_execution_args():
             args_json = serialize_args(args)

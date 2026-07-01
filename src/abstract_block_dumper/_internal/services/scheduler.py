@@ -1,5 +1,5 @@
 import time
-from typing import Protocol
+from typing import Protocol, cast
 
 import structlog
 from django.conf import settings
@@ -114,7 +114,9 @@ class TaskScheduler:
             if not registry_item.requires_backfilling():
                 continue
 
-            from_block = max(0, head - registry_item.backfilling_lookback)
+            # requires_backfilling() guarantees backfilling_lookback is not None.
+            lookback = cast(int, registry_item.backfilling_lookback)
+            from_block = max(0, head - lookback)
             to_block = head - 1
             if to_block < from_block:
                 continue
