@@ -85,7 +85,6 @@ class BackfillScheduler:
         self.dry_run = dry_run
         self.is_running = False
         self._subtensor: bt.Subtensor | None = None
-        self._archive_subtensor: bt.Subtensor | None = None
         self._current_head_cache: int | None = None
 
     @property
@@ -94,34 +93,6 @@ class BackfillScheduler:
         if self._subtensor is None:
             self._subtensor = abd_utils.get_bittensor_client(self.network)
         return self._subtensor
-
-    @property
-    def archive_subtensor(self) -> bt.Subtensor:
-        """Get the archive subtensor connection, creating it if needed."""
-        if self._archive_subtensor is None:
-            self._archive_subtensor = abd_utils.get_bittensor_client("archive")
-        return self._archive_subtensor
-
-    def get_subtensor_for_block(self, block_number: int) -> bt.Subtensor:
-        """
-        Get the appropriate subtensor for the given block number.
-
-        Uses archive network for blocks older than ARCHIVE_BLOCK_THRESHOLD
-        from the current head.
-        """
-        if self._current_head_cache is None:
-            self._current_head_cache = self.subtensor.get_current_block()
-
-        blocks_behind = self._current_head_cache - block_number
-
-        if blocks_behind > ARCHIVE_BLOCK_THRESHOLD:
-            logger.debug(
-                "Using archive network for old block",
-                block_number=block_number,
-                blocks_behind=blocks_behind,
-            )
-            return self.archive_subtensor
-        return self.subtensor
 
     def _get_network_type_for_block(self, block_number: int) -> str:
         """Get the network type string for a block (for display purposes)."""

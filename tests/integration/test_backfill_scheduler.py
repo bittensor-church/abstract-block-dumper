@@ -1,11 +1,10 @@
 """Tests for the BackfillScheduler."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from abstract_block_dumper._internal.services.backfill_scheduler import (
-    ARCHIVE_BLOCK_THRESHOLD,
     DryRunStats,
     backfill_scheduler_factory,
 )
@@ -117,68 +116,6 @@ def test_backfill_scheduler_skips_already_processed_blocks(mock_get_bittensor_cl
     for block_number in range(from_block, to_block + 1):
         task_attempts = TaskAttempt.objects.filter(block_number=block_number)
         assert task_attempts.count() == 1
-
-
-@pytest.mark.django_db
-@patch("abstract_block_dumper._internal.services.utils.get_bittensor_client")
-def test_backfill_scheduler_uses_archive_network_for_old_blocks(mock_get_bittensor_client, setup_backfill_tasks):
-    """Test that archive network is used for blocks older than threshold."""
-    current_head = 1000
-    old_block = current_head - ARCHIVE_BLOCK_THRESHOLD - 100  # Well behind threshold
-
-    mock_subtensor = MagicMock()
-    mock_archive_subtensor = MagicMock()
-
-    mock_subtensor.get_current_block.return_value = current_head
-    mock_archive_subtensor.get_current_block.return_value = current_head
-
-    def get_client(network):
-        if network == "archive":
-            return mock_archive_subtensor
-        return mock_subtensor
-
-    mock_get_bittensor_client.side_effect = get_client
-
-    scheduler = backfill_scheduler_factory(
-        from_block=old_block,
-        to_block=old_block,
-        rate_limit=0,
-    )
-
-    # Verify archive network detection
-    subtensor = scheduler.get_subtensor_for_block(old_block)
-    assert subtensor == mock_archive_subtensor
-
-
-@pytest.mark.django_db
-@patch("abstract_block_dumper._internal.services.utils.get_bittensor_client")
-def test_backfill_scheduler_uses_regular_network_for_recent_blocks(mock_get_bittensor_client, setup_backfill_tasks):
-    """Test that regular network is used for recent blocks."""
-    current_head = 1000
-    recent_block = current_head - 100  # Within threshold
-
-    mock_subtensor = MagicMock()
-    mock_archive_subtensor = MagicMock()
-
-    mock_subtensor.get_current_block.return_value = current_head
-    mock_archive_subtensor.get_current_block.return_value = current_head
-
-    def get_client(network):
-        if network == "archive":
-            return mock_archive_subtensor
-        return mock_subtensor
-
-    mock_get_bittensor_client.side_effect = get_client
-
-    scheduler = backfill_scheduler_factory(
-        from_block=recent_block,
-        to_block=recent_block,
-        rate_limit=0,
-    )
-
-    # Verify regular network is used
-    subtensor = scheduler.get_subtensor_for_block(recent_block)
-    assert subtensor == mock_subtensor
 
 
 @pytest.mark.django_db
