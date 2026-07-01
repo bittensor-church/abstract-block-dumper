@@ -145,3 +145,38 @@ def test_process_item_range_skips_inflight_blocks():
     assert submitted == 1
     submitted_blocks = {call.args[1] for call in executor.execute.call_args_list}
     assert submitted_blocks == {100}
+
+
+@pytest.mark.django_db
+def test_process_item_range_resubmits_failed_blocks():
+    from abstract_block_dumper._internal.dal.memory_registry import task_registry
+
+    block_task(condition=lambda bn: True)(_every_block)
+    executable_path = abd_utils.get_executable_path(_every_block)
+    item = task_registry.get_by_executable_path(executable_path)
+    assert item is not None
+
+    args_json = abd_utils.serialize_args({})
+    # 101 SUCCESS -> skipped; 102 FAILED -> must be re-submitted to self-heal.
+    TaskAttempt.objects.create(
+        block_number=101,
+        executable_path=executable_path,
+        args_json=args_json,
+        status=TaskAttempt.Status.SUCCESS,
+    )
+    TaskAttempt.objects.create(
+        block_number=102,
+        executable_path=executable_path,
+        args_json=args_json,
+        status=TaskAttempt.Status.FAILED,
+    )
+
+    executor = MagicMock()
+    wb = WindowBackfiller(executor)
+
+    submitted = wb.process_item_range(item, from_block=100, to_block=103, head_block=104)
+
+    submitted_blocks = {call.args[1] for call in executor.execute.call_args_list}
+    # 101 (SUCCESS) skipped; 102 (FAILED) re-submitted; 100/103 missing.
+    assert submitted_blocks == {100, 102, 103}
+    assert submitted == 3

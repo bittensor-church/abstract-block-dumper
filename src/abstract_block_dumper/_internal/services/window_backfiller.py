@@ -64,11 +64,9 @@ class WindowBackfiller:
         """
         Process the inclusive range [from_block, to_block] for a registry item.
 
-        Fetches the executed set once per args set (one query), then submits each
-        un-executed, condition-matching block. Returns the number submitted.
-
-        Blocks are skipped if they have already been executed (SUCCESS) or are
-        currently in-flight (PENDING or RUNNING).
+        Per args set, fetches the already-executed (SUCCESS) blocks and the
+        in-flight (PENDING/RUNNING) blocks and skips both, submitting each
+        remaining condition-matching block. Returns the number submitted.
         """
         submitted = 0
         for args in registry_item.get_execution_args():
