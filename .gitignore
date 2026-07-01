@@ -16,3 +16,4 @@ media/
 __pycache__
 src/abstract_block_dumper/_version.py
 .gitdo/
+docs/superpowers/
