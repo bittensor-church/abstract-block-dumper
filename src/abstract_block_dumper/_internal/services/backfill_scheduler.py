@@ -18,13 +18,16 @@ import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.services.block_processor import BaseBlockProcessor, block_processor_factory
 from abstract_block_dumper._internal.services.metrics import (
     BlockProcessingTimer,
-    increment_archive_network_usage,
     increment_blocks_processed,
     set_backfill_progress,
     set_block_lag,
     set_current_block,
 )
 from abstract_block_dumper._internal.services.utils import serialize_args
+from abstract_block_dumper._internal.services.window_backfiller import (
+    ARCHIVE_BLOCK_THRESHOLD,
+    WindowBackfiller,
+)
 
 if TYPE_CHECKING:
     import bittensor as bt
@@ -32,9 +35,6 @@ if TYPE_CHECKING:
     from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
 
 logger = structlog.get_logger(__name__)
-
-# Blocks older than this threshold from current head require archive network
-ARCHIVE_BLOCK_THRESHOLD = 300
 
 ARCHIVE_NETWORK = "archive"
 
@@ -77,6 +77,7 @@ class BackfillScheduler:
 
         """
         self.block_processor = block_processor
+        self.window_backfiller = WindowBackfiller(block_processor.executor)
         self.network = network
         self.from_block = from_block
         self.to_block = to_block
@@ -353,13 +354,6 @@ class BackfillScheduler:
                     block_number=block_number,
                 )
 
-    def _requires_archive_network(self, block_number: int) -> bool:
-        """Check if a block requires archive network based on age."""
-        if self._current_head_cache is None:
-            return False
-        blocks_behind = self._current_head_cache - block_number
-        return blocks_behind > ARCHIVE_BLOCK_THRESHOLD
-
     def _process_registry_item_for_backfill(
         self,
         registry_item: RegistryItem,
@@ -367,35 +361,20 @@ class BackfillScheduler:
         executed_blocks_cache: dict[tuple[str, str], set[int]],
     ) -> None:
         """Process a registry item for backfill - only submits if not already executed."""
+        head_block = self._current_head_cache if self._current_head_cache is not None else block_number
         for args in registry_item.get_execution_args():
             args_json = serialize_args(args)
             cache_key = (registry_item.executable_path, args_json)
-
-            # Check if already executed using pre-fetched cache
             executed_blocks = executed_blocks_cache.get(cache_key, set())
 
-            if block_number in executed_blocks:
-                continue
-
-            # Check condition and execute
             try:
-                if registry_item.match_condition(block_number, **args):
-                    use_archive = self._requires_archive_network(block_number)
-                    if use_archive:
-                        increment_archive_network_usage()
-                    logger.debug(
-                        "Backfilling block",
-                        function_name=registry_item.function.__name__,
-                        block_number=block_number,
-                        args=args,
-                        use_archive=use_archive,
-                    )
-                    self.block_processor.executor.execute(
-                        registry_item,
-                        block_number,
-                        args,
-                        use_archive=use_archive,
-                    )
+                self.window_backfiller.submit_block(
+                    registry_item,
+                    block_number,
+                    args,
+                    executed_blocks,
+                    head_block=head_block,
+                )
             except Exception:
                 logger.exception(
                     "Error during backfill task execution",
