@@ -1,1 +1,0 @@
-The live block scheduler now honors each task's `backfilling_lookback`, backfilling the trailing block window on every new head via the shared `WindowBackfiller` (skipping already-executed and in-flight blocks). Gated by the new `BLOCK_DUMPER_LOOKBACK_ENABLED` setting (default on).

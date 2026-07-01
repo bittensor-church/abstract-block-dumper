@@ -9,6 +9,13 @@ upcoming release can be found in [changelog.d](changelog.d).
 
 <!-- towncrier release notes start -->
 
+## [0.1.7](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.7) - 2026-07-01
+
+### Added
+
+- The live block scheduler now honors each task's `backfilling_lookback`, backfilling the trailing block window on every new head via the shared `WindowBackfiller` (skipping already-executed and in-flight blocks). Gated by the new `BLOCK_DUMPER_LOOKBACK_ENABLED` setting (default on).
+
+
 ## [0.1.6](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.6) - 2026-02-04
 
 No significant changes.
