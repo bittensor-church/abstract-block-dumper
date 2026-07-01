@@ -1,10 +1,15 @@
 from unittest.mock import MagicMock
 
+import pytest
+
+import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
 from abstract_block_dumper._internal.services.window_backfiller import (
     ARCHIVE_BLOCK_THRESHOLD,
     WindowBackfiller,
 )
+from abstract_block_dumper.models import TaskAttempt
+from abstract_block_dumper.v1.decorators import block_task
 
 
 def _make_item(condition=lambda bn, **kw: True, args=None):
@@ -67,3 +72,35 @@ def test_submit_block_passes_args_through():
 
     assert submitted is True
     executor.execute.assert_called_once_with(item, 100, {"netuid": 5}, use_archive=False)
+
+
+def _every_block(block_number: int):
+    return f"ok {block_number}"
+
+
+@pytest.mark.django_db
+def test_process_item_range_submits_missing_blocks_and_skips_executed():
+    from abstract_block_dumper._internal.dal.memory_registry import task_registry
+
+    block_task(condition=lambda bn: True)(_every_block)
+    executable_path = abd_utils.get_executable_path(_every_block)
+    item = task_registry.get_by_executable_path(executable_path)
+    assert item is not None
+
+    # Seed block 101 as already SUCCESS -> must be skipped.
+    TaskAttempt.objects.create(
+        block_number=101,
+        executable_path=executable_path,
+        args_json=abd_utils.serialize_args({}),
+        status=TaskAttempt.Status.SUCCESS,
+    )
+
+    executor = MagicMock()
+    wb = WindowBackfiller(executor)
+
+    submitted = wb.process_item_range(item, from_block=100, to_block=103, head_block=104)
+
+    # 100, 102, 103 submitted; 101 skipped.
+    assert submitted == 3
+    submitted_blocks = {call.args[1] for call in executor.execute.call_args_list}
+    assert submitted_blocks == {100, 102, 103}

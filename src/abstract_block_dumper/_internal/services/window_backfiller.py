@@ -10,9 +10,11 @@ from typing import Any
 
 import structlog
 
+import abstract_block_dumper._internal.dal.django_dal as abd_dal
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
 from abstract_block_dumper._internal.services.executor import CeleryExecutor
 from abstract_block_dumper._internal.services.metrics import increment_archive_network_usage
+from abstract_block_dumper._internal.services.utils import serialize_args
 
 logger = structlog.get_logger(__name__)
 
@@ -51,3 +53,30 @@ class WindowBackfiller:
 
         self.executor.execute(registry_item, block_number, args, use_archive=use_archive)
         return True
+
+    def process_item_range(
+        self,
+        registry_item: RegistryItem,
+        from_block: int,
+        to_block: int,
+        head_block: int,
+    ) -> int:
+        """
+        Process the inclusive range [from_block, to_block] for a registry item.
+
+        Fetches the executed set once per args set (one query), then submits each
+        un-executed, condition-matching block. Returns the number submitted.
+        """
+        submitted = 0
+        for args in registry_item.get_execution_args():
+            args_json = serialize_args(args)
+            executed_blocks = abd_dal.executed_block_numbers(
+                registry_item.executable_path,
+                args_json,
+                from_block,
+                to_block + 1,
+            )
+            for block_number in range(from_block, to_block + 1):
+                if self.submit_block(registry_item, block_number, args, executed_blocks, head_block):
+                    submitted += 1
+        return submitted
