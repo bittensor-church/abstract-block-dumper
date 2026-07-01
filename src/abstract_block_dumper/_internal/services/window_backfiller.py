@@ -40,6 +40,10 @@ class WindowBackfiller:
         """
         Submit one (item, block, args) if it is un-executed and its condition matches.
 
+        Blocks listed in ``executed_blocks`` are skipped. Callers decide what that set
+        contains: ``process_item_range`` also folds in in-flight (PENDING/RUNNING) blocks
+        to avoid re-dispatching them, whereas ``BackfillScheduler`` passes SUCCESS-only.
+
         Returns True if a task was submitted, False otherwise.
         """
         if block_number in executed_blocks:
