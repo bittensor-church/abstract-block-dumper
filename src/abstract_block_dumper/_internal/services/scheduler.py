@@ -146,14 +146,17 @@ class TaskScheduler:
         logger.info("TaskScheduler stopped.")
 
 
-def task_scheduler_factory(network: str = "finney") -> TaskScheduler:
+def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
     """
     Factory for TaskScheduler.
 
     Args:
-        network (str): Bittensor network name. Defaults to "finney"
+        network (str | None): Bittensor network name. If None, it is read from the
+            ``BITTENSOR_NETWORK`` Django setting, falling back to "finney".
 
     """
+    if network is None:
+        network = getattr(settings, "BITTENSOR_NETWORK", "finney")
     bittensor_client = BittensorConnectionClient(network=network)
     state_resolver = DefaultBlockStateResolver(bittensor_client=bittensor_client)
     block_processor = block_processor_factory()
