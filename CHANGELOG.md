@@ -9,6 +9,13 @@ upcoming release can be found in [changelog.d](changelog.d).
 
 <!-- towncrier release notes start -->
 
+## [0.1.8](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.8) - 2026-07-01
+
+### Fixed
+
+- The `BITTENSOR_NETWORK` Django setting is now honored by the live block scheduler (`block_tasks_v1`); previously the scheduler always connected to `finney` regardless of the setting.
+
+
 ## [0.1.7](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.7) - 2026-07-01
 
 ### Added
