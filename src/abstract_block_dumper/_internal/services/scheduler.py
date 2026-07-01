@@ -14,6 +14,7 @@ from abstract_block_dumper._internal.services.metrics import (
     set_current_block,
     set_registered_tasks,
 )
+from abstract_block_dumper._internal.services.window_backfiller import WindowBackfiller
 
 logger = structlog.get_logger(__name__)
 
@@ -50,12 +51,16 @@ class TaskScheduler:
         bittensor_client: BittensorConnectionClient,
         state_resolver: BlockStateResolver,
         poll_interval: int,
+        window_backfiller: WindowBackfiller,
+        lookback_enabled: bool = True,
     ) -> None:
         self.block_processor = block_processor
         self.poll_interval = poll_interval
         self.bittensor_client = bittensor_client
         self.last_processed_block = state_resolver.get_starting_block()
         self.is_running = False
+        self.window_backfiller = window_backfiller
+        self.lookback_enabled = lookback_enabled
 
     def start(self) -> None:
         self.is_running = True
@@ -78,6 +83,8 @@ class TaskScheduler:
                     with BlockProcessingTimer(mode="realtime"):
                         self.block_processor.process_block(current_block)
 
+                    self._fill_lookback(current_block)
+
                     set_current_block("realtime", current_block)
                     increment_blocks_processed("realtime")
                     set_block_lag("realtime", 0)  # Head-only mode has no lag
@@ -92,6 +99,44 @@ class TaskScheduler:
             except Exception:
                 logger.exception("Error in TaskScheduler loop")
                 time.sleep(self.poll_interval)
+
+    def _fill_lookback(self, head: int) -> None:
+        """
+        Backfill the trailing lookback window for tasks that declare one.
+
+        For each registry item with backfilling_lookback=N, submit un-executed,
+        condition-matching blocks in [head-N, head-1]. Bounded by N per item.
+        """
+        if not self.lookback_enabled:
+            return
+
+        for registry_item in self.block_processor.registry.get_functions():
+            if not registry_item.requires_backfilling():
+                continue
+
+            from_block = max(0, head - registry_item.backfilling_lookback)
+            to_block = head - 1
+            if to_block < from_block:
+                continue
+
+            try:
+                submitted = self.window_backfiller.process_item_range(
+                    registry_item, from_block, to_block, head_block=head
+                )
+                if submitted:
+                    logger.info(
+                        "Lookback fill submitted tasks",
+                        function_name=registry_item.function.__name__,
+                        from_block=from_block,
+                        to_block=to_block,
+                        submitted=submitted,
+                    )
+            except Exception:
+                logger.exception(
+                    "Lookback fill failed",
+                    function_name=registry_item.function.__name__,
+                    head=head,
+                )
 
     def stop(self) -> None:
         self.is_running = False
@@ -109,9 +154,12 @@ def task_scheduler_factory(network: str = "finney") -> TaskScheduler:
     """
     bittensor_client = BittensorConnectionClient(network=network)
     state_resolver = DefaultBlockStateResolver(bittensor_client=bittensor_client)
+    block_processor = block_processor_factory()
     return TaskScheduler(
-        block_processor=block_processor_factory(),
+        block_processor=block_processor,
         poll_interval=getattr(settings, "BLOCK_DUMPER_POLL_INTERVAL", 5),
         bittensor_client=bittensor_client,
         state_resolver=state_resolver,
+        window_backfiller=WindowBackfiller(block_processor.executor),
+        lookback_enabled=getattr(settings, "BLOCK_DUMPER_LOOKBACK_ENABLED", True),
     )
