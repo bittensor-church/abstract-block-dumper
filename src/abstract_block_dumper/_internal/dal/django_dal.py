@@ -41,6 +41,21 @@ def executed_block_numbers(executable_path: str, args_json: str, from_block: int
     return set(block_numbers)
 
 
+def inflight_block_numbers(executable_path: str, args_json: str, from_block: int, to_block: int) -> set[int]:
+    block_numbers = (
+        abd_models.TaskAttempt.objects.filter(
+            executable_path=executable_path,
+            args_json=args_json,
+            block_number__gte=from_block,
+            block_number__lt=to_block,
+            status__in=[abd_models.TaskAttempt.Status.PENDING, abd_models.TaskAttempt.Status.RUNNING],
+        )
+        .values_list("block_number", flat=True)
+        .iterator()
+    )
+    return set(block_numbers)
+
+
 def reset_to_pending(task: abd_models.TaskAttempt) -> None:
     task.celery_task_id = None
     task.status = abd_models.TaskAttempt.Status.PENDING

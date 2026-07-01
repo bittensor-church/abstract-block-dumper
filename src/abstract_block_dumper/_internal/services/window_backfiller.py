@@ -66,17 +66,26 @@ class WindowBackfiller:
 
         Fetches the executed set once per args set (one query), then submits each
         un-executed, condition-matching block. Returns the number submitted.
+
+        Blocks are skipped if they have already been executed (SUCCESS) or are
+        currently in-flight (PENDING or RUNNING).
         """
         submitted = 0
         for args in registry_item.get_execution_args():
             args_json = serialize_args(args)
-            executed_blocks = abd_dal.executed_block_numbers(
+            skip_blocks = abd_dal.executed_block_numbers(
+                registry_item.executable_path,
+                args_json,
+                from_block,
+                to_block + 1,
+            )
+            skip_blocks |= abd_dal.inflight_block_numbers(
                 registry_item.executable_path,
                 args_json,
                 from_block,
                 to_block + 1,
             )
             for block_number in range(from_block, to_block + 1):
-                if self.submit_block(registry_item, block_number, args, executed_blocks, head_block):
+                if self.submit_block(registry_item, block_number, args, skip_blocks, head_block):
                     submitted += 1
         return submitted
