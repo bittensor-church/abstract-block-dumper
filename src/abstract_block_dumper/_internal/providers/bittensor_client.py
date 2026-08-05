@@ -23,7 +23,7 @@ class BittensorConnectionClient:
 
     Supports context manager protocol for safe connection cleanup:
         with BittensorConnectionClient(network="finney") as client:
-            block = client.subtensor.get_current_block()
+            block = client.subtensor.block
     """
 
     def __init__(self, network: str) -> None:
@@ -100,7 +100,7 @@ class BittensorConnectionClient:
         from the current head.
         """
         if self._current_block_cache is None:
-            self._current_block_cache = self.subtensor.get_current_block()
+            self._current_block_cache = self.subtensor.block
 
         blocks_behind = self._current_block_cache - block_number
 

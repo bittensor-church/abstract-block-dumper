@@ -42,7 +42,8 @@ class MockedSubtensor:
     def __init__(self, current_block: int = 1000) -> None:
         self._current_block = current_block
 
-    def get_current_block(self) -> int:
+    @property
+    def block(self) -> int:
         return self._current_block
 
     def set_current_block(self, block: int) -> None:

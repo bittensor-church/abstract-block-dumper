@@ -36,12 +36,12 @@ class DefaultBlockStateResolver:
     def get_starting_block(self) -> int:
         start_setting = getattr(settings, "BLOCK_DUMPER_START_FROM_BLOCK", None)
         if start_setting == "current":
-            return self.bittensor_client.subtensor.get_current_block()
+            return self.bittensor_client.subtensor.block
         if isinstance(start_setting, int):
             return start_setting
 
         # Default: resume from DB or current
-        return abd_dal.get_the_latest_executed_block_number() or self.bittensor_client.subtensor.get_current_block()
+        return abd_dal.get_the_latest_executed_block_number() or self.bittensor_client.subtensor.block
 
 
 class TaskScheduler:
@@ -76,7 +76,7 @@ class TaskScheduler:
 
         while self.is_running:
             try:
-                current_block = self.bittensor_client.subtensor.get_current_block()
+                current_block = self.bittensor_client.subtensor.block
 
                 # Only process the current head block, skip if already processed
                 if current_block != self.last_processed_block:

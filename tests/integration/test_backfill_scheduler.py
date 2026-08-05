@@ -36,7 +36,7 @@ def test_backfill_scheduler_processes_block_range(mock_get_bittensor_client, set
     current_head = 500
 
     mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = current_head
+    mock_subtensor.block = current_head
 
     scheduler = backfill_scheduler_factory(
         from_block=from_block,
@@ -62,7 +62,7 @@ def test_backfill_scheduler_dry_run_returns_stats(mock_get_bittensor_client, set
     current_head = 500
 
     mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = current_head
+    mock_subtensor.block = current_head
 
     scheduler = backfill_scheduler_factory(
         from_block=from_block,
@@ -91,7 +91,7 @@ def test_backfill_scheduler_skips_already_processed_blocks(mock_get_bittensor_cl
     current_head = 500
 
     mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = current_head
+    mock_subtensor.block = current_head
 
     # Process some blocks first
     scheduler1 = backfill_scheduler_factory(
@@ -123,7 +123,7 @@ def test_backfill_scheduler_skips_already_processed_blocks(mock_get_bittensor_cl
 def test_backfill_scheduler_stop(mock_get_bittensor_client, setup_backfill_tasks):
     """Test that scheduler can be stopped."""
     mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = 500
+    mock_subtensor.block = 500
 
     scheduler = backfill_scheduler_factory(
         from_block=100,
@@ -145,7 +145,7 @@ def test_backfill_scheduler_dry_run_counts_already_processed(mock_get_bittensor_
     current_head = 500
 
     mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = current_head
+    mock_subtensor.block = current_head
 
     # Process some blocks first
     scheduler1 = backfill_scheduler_factory(

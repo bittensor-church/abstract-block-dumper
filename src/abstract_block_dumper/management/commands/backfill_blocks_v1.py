@@ -306,7 +306,7 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         # Get network type
-        scheduler._current_head_cache = scheduler.subtensor.get_current_block()  # noqa: SLF001
+        scheduler._current_head_cache = scheduler.subtensor.block  # noqa: SLF001
         network_type = scheduler._get_network_type_for_block(from_block)  # noqa: SLF001
 
         self.stdout.write(f"Block range: {from_block} -> {to_block} ({total_blocks} blocks)")

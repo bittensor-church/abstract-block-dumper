@@ -11,7 +11,7 @@ from abstract_block_dumper.models import TaskAttempt
 def test_complete_e2e_workflow(mock_get_bittensor_client, setup_test_tasks) -> None:
     block_number = 300
     mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = block_number
+    mock_subtensor.block = block_number
 
     scheduler = task_scheduler_factory()
     scheduler.last_processed_block = block_number - 1
@@ -33,7 +33,7 @@ def test_block_processing_flow(mock_get_bittensor_client, setup_test_tasks):
     current_block = 100
 
     mock_subtensor = mock_get_bittensor_client.return_value
-    mock_subtensor.get_current_block.return_value = current_block
+    mock_subtensor.block = current_block
 
     # Create scheduler and process block
     scheduler = task_scheduler_factory()
