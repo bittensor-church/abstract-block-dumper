@@ -9,6 +9,13 @@ upcoming release can be found in [changelog.d](changelog.d).
 
 <!-- towncrier release notes start -->
 
+## [0.1.9](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.9) - 2026-08-05
+
+### Changed
+
+- Upgraded bittensor SDK requirement to >=11.0.1 and migrated from the removed `Subtensor.get_current_block()` method to the `Subtensor.block` property.
+
+
 ## [0.1.8](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.8) - 2026-07-01
 
 ### Fixed
