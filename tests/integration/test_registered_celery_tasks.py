@@ -77,7 +77,7 @@ def test_backfill_via_backfill_scheduler():
     )(backfill_task)
 
     with patch("abstract_block_dumper._internal.services.utils.get_bittensor_client") as mock_client:
-        mock_client.return_value.get_current_block.return_value = 500
+        mock_client.return_value.block = 500
 
         # Use BackfillScheduler instead of process_backfill
         scheduler = backfill_scheduler_factory(

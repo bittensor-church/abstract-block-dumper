@@ -97,7 +97,7 @@ class BackfillScheduler:
     def _get_network_type_for_block(self, block_number: int) -> str:
         """Get the network type string for a block (for display purposes)."""
         if self._current_head_cache is None:
-            self._current_head_cache = self.subtensor.get_current_block()
+            self._current_head_cache = self.subtensor.block
 
         blocks_behind = self._current_head_cache - block_number
         return ARCHIVE_NETWORK if blocks_behind > ARCHIVE_BLOCK_THRESHOLD else self.network
@@ -113,7 +113,7 @@ class BackfillScheduler:
         self.is_running = True
 
         # Refresh current head for accurate archive network decisions
-        self._current_head_cache = self.subtensor.get_current_block()
+        self._current_head_cache = self.subtensor.block
 
         total_blocks = self.to_block - self.from_block + 1
         network_type = self._get_network_type_for_block(self.from_block)
