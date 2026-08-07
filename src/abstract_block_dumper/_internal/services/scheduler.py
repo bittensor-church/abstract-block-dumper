@@ -5,6 +5,7 @@ import structlog
 from django.conf import settings
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
+import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.providers.bittensor_client import BittensorConnectionClient
 from abstract_block_dumper._internal.services.block_processor import BaseBlockProcessor, block_processor_factory
 from abstract_block_dumper._internal.services.metrics import (
@@ -165,6 +166,9 @@ def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
         poll_interval=getattr(settings, "BLOCK_DUMPER_POLL_INTERVAL", 5),
         bittensor_client=bittensor_client,
         state_resolver=state_resolver,
-        window_backfiller=WindowBackfiller(block_processor.executor),
+        window_backfiller=WindowBackfiller(
+            block_processor.executor,
+            queue=abd_utils.get_backfill_queue(),
+        ),
         lookback_enabled=getattr(settings, "BLOCK_DUMPER_LOOKBACK_ENABLED", True),
     )

@@ -28,3 +28,14 @@ def test_factory_explicit_network_overrides_setting(mock_get_bittensor_client):
         scheduler = task_scheduler_factory(network="explicit")
 
     assert scheduler.bittensor_client.network == "explicit"
+
+
+@pytest.mark.django_db
+@patch("abstract_block_dumper._internal.services.utils.get_bittensor_client")
+def test_factory_routes_lookback_to_configured_backfill_queue(mock_get_bittensor_client):
+    mock_get_bittensor_client.return_value.block = 100
+
+    with override_settings(BLOCK_DUMPER_BACKFILL_QUEUE="block-backfill"):
+        scheduler = task_scheduler_factory()
+
+    assert scheduler.window_backfiller.queue == "block-backfill"

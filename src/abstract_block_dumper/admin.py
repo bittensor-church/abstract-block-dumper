@@ -22,6 +22,7 @@ class TaskAttemptAdmin(admin.ModelAdmin):
         "status",
         # Execution fields
         "celery_task_id",
+        "celery_queue_override",
         "execution_result",
         # Attempts & Retry fields
         "last_attempted_at",
@@ -47,6 +48,7 @@ class TaskAttemptAdmin(admin.ModelAdmin):
                 "fields": (
                     "status",
                     "celery_task_id",
+                    "celery_queue_override",
                     "execution_result",
                 )
             },

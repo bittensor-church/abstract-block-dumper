@@ -18,6 +18,7 @@ class CeleryExecutor:
         args: dict[str, Any],
         *,
         use_archive: bool = False,
+        queue: str | None = None,
     ) -> None:
         task_attempt, created = abd_dal.task_create_or_get_pending(
             block_number=block_number,
@@ -31,6 +32,10 @@ class CeleryExecutor:
                 status=task_attempt.status,
             )
             return
+
+        # Persist the routing so retries — including ones recovered from the database
+        # by a different process — can be re-dispatched to the same queue.
+        abd_dal.task_record_queue_override(task_attempt, queue)
 
         task_kwargs = {
             "block_number": block_number,
@@ -46,6 +51,8 @@ class CeleryExecutor:
         celery_options = {
             k: v for k, v in (registry_item.celery_kwargs or {}).items() if k not in ("kwargs", "eta", "args")
         }
+        if queue is not None:
+            celery_options["queue"] = queue
 
         apply_async_kwargs.update(celery_options)
 

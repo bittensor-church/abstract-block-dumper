@@ -74,6 +74,23 @@ def test_submit_block_passes_args_through():
     executor.execute.assert_called_once_with(item, 100, {"netuid": 5}, use_archive=False)
 
 
+def test_submit_block_routes_to_configured_queue():
+    executor = MagicMock()
+    wb = WindowBackfiller(executor, queue="block-backfill")
+    item = _make_item()
+
+    submitted = wb.submit_block(item, 100, {}, executed_blocks=set(), head_block=100)
+
+    assert submitted is True
+    executor.execute.assert_called_once_with(
+        item,
+        100,
+        {},
+        use_archive=False,
+        queue="block-backfill",
+    )
+
+
 def _every_block(block_number: int):
     return f"ok {block_number}"
 

@@ -132,6 +132,7 @@ if "test" in sys.argv or "pytest" in sys.modules:
 BITTENSOR_NETWORK = "finney"  # or 'local', 'mainnet',
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds - ultra-fast polling for real-time processing
 BLOCK_DUMPER_START_FROM_BLOCK = "current"  # None = resume from DB, 'current' = current block, or block number
+BLOCK_DUMPER_BACKFILL_QUEUE = os.getenv("BLOCK_DUMPER_BACKFILL_QUEUE") or None
 BLOCK_TASK_RETRY_BACKOFF = 2
 BLOCK_DUMPER_MAX_ATTEMPTS = 3
 

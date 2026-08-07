@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import pytest
+from django.test import override_settings
 
 from abstract_block_dumper._internal.services.backfill_scheduler import (
     DryRunStats,
@@ -167,3 +168,14 @@ def test_backfill_scheduler_dry_run_counts_already_processed(mock_get_bittensor_
     assert stats.already_processed == 5  # 100-104 already done
     assert stats.blocks_needing_tasks == 6  # 105-110 need tasks
     assert stats.estimated_tasks == 6
+
+
+@pytest.mark.django_db
+@patch("abstract_block_dumper._internal.services.utils.get_bittensor_client")
+def test_backfill_scheduler_uses_configured_queue(mock_get_bittensor_client):
+    mock_get_bittensor_client.return_value.block = 500
+
+    with override_settings(BLOCK_DUMPER_BACKFILL_QUEUE="block-backfill"):
+        scheduler = backfill_scheduler_factory(from_block=100, to_block=100)
+
+    assert scheduler.window_backfiller.queue == "block-backfill"

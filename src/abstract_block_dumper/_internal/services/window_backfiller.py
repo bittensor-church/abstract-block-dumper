@@ -25,9 +25,15 @@ ARCHIVE_BLOCK_THRESHOLD = 300
 class WindowBackfiller:
     """Submit un-executed, condition-matching blocks for a registry item."""
 
-    def __init__(self, executor: CeleryExecutor, archive_threshold: int = ARCHIVE_BLOCK_THRESHOLD) -> None:
+    def __init__(
+        self,
+        executor: CeleryExecutor,
+        archive_threshold: int = ARCHIVE_BLOCK_THRESHOLD,
+        queue: str | None = None,
+    ) -> None:
         self.executor = executor
         self.archive_threshold = archive_threshold
+        self.queue = queue
 
     def submit_block(
         self,
@@ -55,7 +61,10 @@ class WindowBackfiller:
         if use_archive:
             increment_archive_network_usage()
 
-        self.executor.execute(registry_item, block_number, args, use_archive=use_archive)
+        execute_kwargs: dict[str, Any] = {"use_archive": use_archive}
+        if self.queue is not None:
+            execute_kwargs["queue"] = self.queue
+        self.executor.execute(registry_item, block_number, args, **execute_kwargs)
         return True
 
     def process_item_range(

@@ -123,8 +123,18 @@ def task_mark_as_failed(task: abd_models.TaskAttempt) -> None:
     task.save()
 
 
-def task_schedule_to_retry(task: abd_models.TaskAttempt) -> None:
+def task_record_queue_override(task: abd_models.TaskAttempt, queue: str | None) -> None:
+    """Record the queue override a submission used, so its retries can reuse it."""
+    if task.celery_queue_override == queue:
+        return
+    task.celery_queue_override = queue
+    task.save(update_fields=["celery_queue_override", "updated_at"])
+
+
+def task_schedule_to_retry(task: abd_models.TaskAttempt, queue: str | None) -> None:
+    """Mark a failed task as pending again, on the queue its retry is being sent to."""
     task.status = abd_models.TaskAttempt.Status.PENDING
+    task.celery_queue_override = queue
     task.save()
 
 

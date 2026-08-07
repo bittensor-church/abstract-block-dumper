@@ -26,6 +26,10 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
     Schedule a retry for a failed task by calling the decorated Celery task directly.
 
     Task must already be in FAILED state with next_retry_at set by mark_failed()
+
+    The retry reuses the queue recorded on the attempt by the original submission,
+    tracking renames of ``BLOCK_DUMPER_BACKFILL_QUEUE`` and falling back to the task's
+    default queue when backfill routing is switched off (see ``resolve_retry_queue``).
     """
     if not task_attempt.next_retry_at:
         logger.error(
@@ -50,7 +54,8 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
         next_retry_at=task_attempt.next_retry_at,
     )
 
-    abd_dal.task_schedule_to_retry(task_attempt)
+    queue = abd_utils.resolve_retry_queue(task_attempt.celery_queue_override)
+    abd_dal.task_schedule_to_retry(task_attempt, queue)
 
     celery_task = task_registry.get_by_executable_path(task_attempt.executable_path)
     if not celery_task:
@@ -60,13 +65,17 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
         )
         return
 
-    celery_task.function.apply_async(
-        kwargs={
+    apply_async_kwargs: dict[str, Any] = {
+        "kwargs": {
             "block_number": task_attempt.block_number,
             **task_attempt.args_dict,
         },
-        eta=task_attempt.next_retry_at,
-    )
+        "eta": task_attempt.next_retry_at,
+    }
+    if queue is not None:
+        apply_async_kwargs["queue"] = queue
+
+    celery_task.function.apply_async(**apply_async_kwargs)
 
     # Record retry metric
     task_name = task_attempt.executable_path.split(".")[-1]
