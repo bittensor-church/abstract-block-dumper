@@ -42,7 +42,7 @@ Register functions -> detect new blocks -> evaluate conditions -> send to Celery
 
 4. Queue
 Tasks are sent to Celery with queue and timeout settings from `celery_kwargs`. Backfill
-submissions can be routed to an isolated queue with `BLOCK_DUMPER_BACKFILL_QUEUE`.
+submissions can be routed per task with the `backfill_queue` decorator argument.
 
 5. Execute
 Celery runs the function with block info, capturing results and errors
@@ -127,8 +127,8 @@ In separate terminals, start Celery workers to execute tasks:
 $ celery -A your_project worker --loglevel=info
 ```
 
-When `BLOCK_DUMPER_BACKFILL_QUEUE = "block-backfill"` is configured, use dedicated
-worker pools so live work always retains execution capacity:
+When tasks declare `backfill_queue="block-backfill"`, use dedicated worker pools so live
+work always retains execution capacity:
 
 ```bash
 # Default/live queue only
@@ -140,7 +140,8 @@ $ celery -A your_project worker --loglevel=info --queues=block-backfill --hostna
 
 Celery's default queue is named `celery` unless your application changes
 `CELERY_TASK_DEFAULT_QUEUE`. Include every live queue named by a task's `celery_kwargs`
-in the live worker's `--queues` list.
+in the live worker's `--queues` list and every task-specific `backfill_queue` in the
+corresponding backfill workers' lists.
 
 See examples below:
 
@@ -165,7 +166,8 @@ def process_every_10_blocks(block_number: int):
     condition=lambda bn, netuid: bn % 100 == 0,
     args=[{"netuid": 1}, {"netuid": 3}, {"netuid": 22}],
     backfilling_lookback=300,
-    celery_kwargs={"queue": "high-priority"}
+    backfill_queue="high-priority-backfill",
+    celery_kwargs={"queue": "high-priority"},
 )
 def process_multi_netuid_task(block_number: int, netuid: int):
     print(f"Processing block {block_number} for netuid: {netuid}")
@@ -187,7 +189,7 @@ bounded to at most `N` blocks of catch-up per head.
 
 ```python
 # On each new head, also (re)fill the previous 300 blocks for this task
-@block_task(backfilling_lookback=300)
+@block_task(backfilling_lookback=300, backfill_queue="index-backfill")
 def index_recent_blocks(block_number: int):
     ...
 ```
@@ -197,12 +199,13 @@ and in-flight (`PENDING`/`RUNNING`) blocks are skipped; failed blocks are retrie
 to the normal retry backoff. The whole mechanism can be disabled globally with
 `BLOCK_DUMPER_LOOKBACK_ENABLED = False` (see [Configuration Options Reference](#configuration-options-reference)).
 
-Set `BLOCK_DUMPER_BACKFILL_QUEUE` to route these lookback submissions away from the
-task's normal queue. The current-head submission continues to use the queue from the
-task's `celery_kwargs`, or Celery's default queue when none is declared. Automatic
-retries preserve the queue used for the original submission — it is recorded on the
-`TaskAttempt` row, so retries re-dispatched by a worker and retries recovered from the
-database after a restart both stay on it.
+Set `backfill_queue` on a task to route its lookback submissions away from its normal
+queue. The same queue is also used by the historical backfill command. Current-head
+submissions continue to use the queue from the task's `celery_kwargs`, or Celery's
+default queue when none is declared. If `backfill_queue` is omitted, backfill and live
+submissions use the same routing. Automatic retries preserve the queue used for the
+original submission — it is recorded on the `TaskAttempt` row, so retries re-dispatched
+by a worker and retries recovered from the database after a restart both stay on it.
 
 ### 2. Historical backfill command (`backfill_blocks_v1`)
 
@@ -228,7 +231,7 @@ If `--from-block` / `--to-block` are omitted, they default to the min / max bloc
 present in the database. Blocks older than ~300 from the current head are automatically
 fetched via the archive network.
 
-The historical command also honors `BLOCK_DUMPER_BACKFILL_QUEUE`.
+The historical command honors each task's `backfill_queue` annotation.
 
 
 ## Maintenance Tasks
@@ -300,7 +303,6 @@ BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'testnet', 'mainnet'
 BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
 BLOCK_DUMPER_LOOKBACK_ENABLED = True  # honor per-task backfilling_lookback (default True)
-BLOCK_DUMPER_BACKFILL_QUEUE = 'block-backfill'  # optional; default None
 BLOCK_TASK_RETRY_BACKOFF = 2  # minutes for retry backoff base
 BLOCK_DUMPER_MAX_ATTEMPTS = 3  # maximum retry attempts
 BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 1440  # maximum retry delay (24 hours)
@@ -364,42 +366,6 @@ BLOCK_DUMPER_LOOKBACK_ENABLED = True
 
 ---
 
-### `BLOCK_DUMPER_BACKFILL_QUEUE`
-
-- **Type:** `str | None`
-- **Default:** `None`
-- **Description:** Routes both live-scheduler lookback submissions and historical
-  `backfill_blocks_v1` submissions to this Celery queue. It overrides a task-level
-  `celery_kwargs={"queue": ...}` for backfill submissions only. Live/current-head
-  submissions keep their task-level or default Celery queue.
-
-```python
-BLOCK_DUMPER_BACKFILL_QUEUE = 'block-backfill'
-```
-
-Run workers with disjoint `--queues` lists to obtain capacity isolation. Merely declaring
-two queues while a single worker consumes both does not reserve capacity for live work.
-
-Each backfill submission records its queue on the `TaskAttempt`, and retries reuse it. The
-recorded queue marks the attempt as backfill work; the *current* value of the setting then
-decides where that work goes, so changing it takes effect for attempts already in the
-database:
-
-| Change to `BLOCK_DUMPER_BACKFILL_QUEUE` | Where outstanding backfill retries go |
-| --- | --- |
-| unchanged | the same backfill queue |
-| renamed | the new backfill queue, so isolation is preserved across the rename |
-| removed | the task's `celery_kwargs` queue, or Celery's default live queue |
-
-Retries never strand on a queue no worker consumes, and removing the setting drains
-outstanding backfill retries onto live workers. Live submissions record no queue and are
-never pulled onto the backfill queue.
-Queue isolation protects worker capacity, but the live scheduler still scans lookback
-windows synchronously after scheduling each current head; exceptionally large windows
-can therefore delay its next polling cycle.
-
----
-
 ### `BLOCK_DUMPER_MAX_ATTEMPTS`
 - **Type:** `int`
 - **Default:** `3`
@@ -450,7 +416,8 @@ BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 720  # 12 hours max
 The repository includes a complete working example in the `example_project/` directory that demonstrates:
 
 - Django application setup with abstract-block-dumper
-- Multiple task types defined with `@block_task` (every-block, conditional, multi-netuid, and `backfilling_lookback`)
+- Multiple task types defined with `@block_task` (every-block, conditional, multi-netuid,
+  `backfilling_lookback`, and task-specific `backfill_queue` routing)
 - Error handling with a randomly failing task
 - Docker Compose setup with all required services
 - Monitoring with Flower (Celery monitoring tool)

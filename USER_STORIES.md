@@ -119,6 +119,11 @@ I can set the queue, timeouts, or retry policy for a specific task.
   when the shared task is declared and when each block submission is dispatched.
 - `kwargs`, `args`, and `eta` in `celery_kwargs` are ignored at submission time — the
   library owns those.
+- `backfill_queue="high-priority-backfill"` routes this task's lookback and historical
+  backfill submissions to a separate queue without changing its live routing.
+- If `backfill_queue` is omitted, backfill submissions use the task's `celery_kwargs`
+  routing or Celery's default queue, exactly like live submissions.
+- A blank or non-string `backfill_queue` raises `ValueError` at import time.
 - With no `queue`, submissions go to Celery's default queue
   (`CELERY_TASK_DEFAULT_QUEUE`, normally `celery`).
 
@@ -221,7 +226,7 @@ with the pool.
 | `status` | `pending` / `running` / `success` / `failed` |
 | `celery_task_id` | The Celery task id of the current/last attempt |
 | `execution_result` | JSON return value on success |
-| `celery_queue_override` | Queue recorded for backfill submissions (`NULL` for live work) |
+| `celery_queue_override` | Queue recorded for task-specific backfill submissions (`NULL` when no backfill queue was set) |
 | `attempt_count`, `last_attempted_at`, `next_retry_at` | Retry bookkeeping |
 | `created_at`, `updated_at` | Timestamps |
 
@@ -249,16 +254,8 @@ backfill task never lands on my live workers by accident.
 
 - The queue used for a submission is persisted on `TaskAttempt.celery_queue_override`, so
   routing survives a process restart.
-- On retry, the recorded queue is resolved against the *current*
-  `BLOCK_DUMPER_BACKFILL_QUEUE`:
-
-  | Change to the setting | Where outstanding backfill retries go |
-  | --- | --- |
-  | unchanged | the same backfill queue |
-  | renamed | the new backfill queue (isolation preserved across the rename) |
-  | removed | the task's own `celery_kwargs` queue, or Celery's default |
-
-- Retries never strand on a queue no worker consumes.
+- On retry, the exact recorded queue is reused. Changing a task's annotation affects new
+  submissions, not attempts already persisted in the database.
 - Live submissions record no override and are never pulled onto the backfill queue.
 
 ### US-4.6 — No phantom successes
@@ -341,9 +338,11 @@ them from a node that still has the state.
 **As an** operator, **I want** backfill submissions on a separate queue, **so that** a
 large backfill cannot starve real-time processing.
 
-- `BLOCK_DUMPER_BACKFILL_QUEUE = "block-backfill"` routes **both** lookback fills and
-  `backfill_blocks_v1` submissions to that queue, overriding a task's `celery_kwargs`
-  queue for backfill submissions only.
+- `@block_task(backfill_queue="block-backfill")` routes both that task's lookback fills
+  and its `backfill_blocks_v1` submissions to the specified queue, overriding its
+  `celery_kwargs` queue for backfill submissions only.
+- Different tasks can declare different backfill queues. A task that omits the argument
+  uses its normal Celery routing for backfills.
 - Current-head (live) submissions keep the task-level or default queue.
 - An empty or non-string value raises `ValueError` rather than routing work to a nonsense
   queue name.
@@ -437,7 +436,6 @@ Every setting is read with `getattr(settings, ..., default)` — none is mandato
 | `BLOCK_DUMPER_START_FROM_BLOCK` | `str \| int \| None` | `None` | Starting point (US-3.2) |
 | `BLOCK_DUMPER_POLL_INTERVAL` | `int` | `5` | Seconds between head checks |
 | `BLOCK_DUMPER_LOOKBACK_ENABLED` | `bool` | `True` | Global kill-switch for `backfilling_lookback` |
-| `BLOCK_DUMPER_BACKFILL_QUEUE` | `str \| None` | `None` | Celery queue for backfill submissions |
 | `BLOCK_DUMPER_MAX_ATTEMPTS` | `int` | `3` | Maximum attempts before giving up |
 | `BLOCK_TASK_RETRY_BACKOFF` | `int` | `1` | Exponential backoff base, in minutes |
 | `BLOCK_TASK_MAX_RETRY_DELAY_MINUTES` | `int` | `1440` | Backoff cap |
@@ -452,7 +450,8 @@ against something known-good.
 - `example_project/` runs with `docker-compose up --build` and starts Django (admin
   `admin`/`admin`), Celery workers, the scheduler, Flower, Redis, and PostgreSQL.
 - It demonstrates every task shape: every-block, conditional, multi-args/multi-netuid,
-  `backfilling_lookback`, and a deliberately failing task that exercises retries.
+  `backfilling_lookback`, task-specific `backfill_queue` routing, and a deliberately
+  failing task that exercises retries.
 
 ---
 

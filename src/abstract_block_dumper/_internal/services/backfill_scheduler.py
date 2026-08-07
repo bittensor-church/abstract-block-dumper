@@ -63,7 +63,6 @@ class BackfillScheduler:
         to_block: int,
         rate_limit: float = 1.0,
         dry_run: bool = False,
-        backfill_queue: str | None = None,
     ) -> None:
         """
         Initialize the backfill scheduler.
@@ -75,11 +74,10 @@ class BackfillScheduler:
             to_block: Ending block number (inclusive).
             rate_limit: Seconds to sleep between processing each block.
             dry_run: If True, preview what would be processed without executing.
-            backfill_queue: Optional Celery queue for submitted backfill tasks.
 
         """
         self.block_processor = block_processor
-        self.window_backfiller = WindowBackfiller(block_processor.executor, queue=backfill_queue)
+        self.window_backfiller = WindowBackfiller(block_processor.executor)
         self.network = network
         self.from_block = from_block
         self.to_block = to_block
@@ -392,5 +390,4 @@ def backfill_scheduler_factory(
         to_block=to_block,
         rate_limit=rate_limit,
         dry_run=dry_run,
-        backfill_queue=abd_utils.get_backfill_queue(),
     )

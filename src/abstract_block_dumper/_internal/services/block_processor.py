@@ -6,7 +6,6 @@ import structlog
 from django.db import transaction
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
-import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.dal.memory_registry import BaseRegistry, RegistryItem, task_registry
 from abstract_block_dumper._internal.exceptions import ConditionEvaluationError
 from abstract_block_dumper._internal.services.executor import CeleryExecutor
@@ -124,7 +123,7 @@ class BlockProcessor:
                     abd_dal.reset_to_pending(task_attempt)
 
                 # Execute outside of transaction to avoid holding locks too long
-                queue = abd_utils.resolve_retry_queue(task_attempt.celery_queue_override)
+                queue = task_attempt.celery_queue_override
                 self.executor.execute(
                     registry_item,
                     task_attempt.block_number,

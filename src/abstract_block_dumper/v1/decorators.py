@@ -27,9 +27,7 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
 
     Task must already be in FAILED state with next_retry_at set by mark_failed()
 
-    The retry reuses the queue recorded on the attempt by the original submission,
-    tracking renames of ``BLOCK_DUMPER_BACKFILL_QUEUE`` and falling back to the task's
-    default queue when backfill routing is switched off (see ``resolve_retry_queue``).
+    The retry reuses the exact queue override recorded on the original submission.
     """
     if not task_attempt.next_retry_at:
         logger.error(
@@ -54,7 +52,7 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
         next_retry_at=task_attempt.next_retry_at,
     )
 
-    queue = abd_utils.resolve_retry_queue(task_attempt.celery_queue_override)
+    queue = task_attempt.celery_queue_override
     abd_dal.task_schedule_to_retry(task_attempt, queue)
 
     celery_task = task_registry.get_by_executable_path(task_attempt.executable_path)
@@ -190,6 +188,7 @@ def block_task(
     condition: Callable[..., bool] | None = None,
     args: list[dict[str, Any]] | None = None,
     backfilling_lookback: int | None = None,
+    backfill_queue: str | None = None,
     celery_kwargs: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     """
@@ -211,6 +210,9 @@ def block_task(
                    is not currently in flight, still respecting ``condition``. Defaults to
                    None (no lookback backfilling). Globally gated by the
                    ``BLOCK_DUMPER_LOOKBACK_ENABLED`` Django setting.
+        backfill_queue: Optional Celery queue used for this task's lookback and historical
+                   backfill submissions. Live submissions continue to use ``celery_kwargs``.
+                   If omitted, backfills use the same Celery routing as live submissions.
         celery_kwargs: Additional Celery task parameters
 
     Examples:
@@ -230,6 +232,7 @@ def block_task(
             condition=lambda bn, netuid: bn + netuid % 100 == 0,
             args=[{"netuid": 3}, {"netuid": 22}],
             backfilling_lookback=300,
+            backfill_queue="high-priority-backfill",
             celery_kwargs={"queue": "high-priority"}
         )
         def multi_netuid_task(block_number: int, netuid: int):
@@ -238,6 +241,10 @@ def block_task(
     """
     # Default condition: always run
     effective_condition = condition if condition is not None else (lambda *_args, **_kwargs: True)
+    if backfill_queue is not None and (not isinstance(backfill_queue, str) or not backfill_queue.strip()):
+        msg = "backfill_queue must be a non-empty string or None"
+        raise ValueError(msg)
+    effective_backfill_queue = backfill_queue.strip() if backfill_queue is not None else None
 
     def decorator(fn: Callable[..., Any]) -> Any:
         if not callable(effective_condition):
@@ -271,6 +278,7 @@ def block_task(
                 function=cast("Task", celery_task),
                 args=args,
                 backfilling_lookback=backfilling_lookback,
+                backfill_queue=effective_backfill_queue,
                 celery_kwargs=celery_kwargs or {},
             )
         )

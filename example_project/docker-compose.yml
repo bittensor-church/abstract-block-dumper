@@ -37,7 +37,7 @@ services:
     build:
       context: ..
       dockerfile: example_project/Dockerfile
-    command: uv run celery -A example_project worker --loglevel=info
+    command: uv run celery -A example_project worker --loglevel=info --queues=celery,recent-blocks-backfill,subnet-analysis-backfill
     volumes:
       - .:/app/example_project
       - ../src:/app/src

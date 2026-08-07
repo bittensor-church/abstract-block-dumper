@@ -17,6 +17,7 @@ class RegistryItem:
     function: Task
     args: list[dict[str, Any]] | None = None
     backfilling_lookback: int | None = None
+    backfill_queue: str | None = None
     celery_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def match_condition(self, block_number: int, **kwargs: dict[str, Any]) -> bool:
@@ -78,6 +79,7 @@ class MemoryRegistry(BaseRegistry):
             executable_path=item.executable_path,
             args_counter=len(item.args or []),
             backfilling_lookback=item.backfilling_lookback,
+            backfill_queue=item.backfill_queue,
         )
 
     def get_functions(self) -> list[RegistryItem]:
