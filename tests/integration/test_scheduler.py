@@ -361,7 +361,6 @@ def test_live_retry_is_unaffected_by_a_configured_backfill_queue():
         assert task_attempt.celery_queue_override is None
 
 
-
 @pytest.mark.django_db
 def test_retry_recover_mechanism():
     """Test that scheduler recovers orphaned failed tasks ready for retry."""
