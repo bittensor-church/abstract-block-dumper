@@ -123,7 +123,13 @@ class BlockProcessor:
                     abd_dal.reset_to_pending(task_attempt)
 
                 # Execute outside of transaction to avoid holding locks too long
-                self.executor.execute(registry_item, task_attempt.block_number, task_attempt.args_dict)
+                queue = task_attempt.celery_queue_override
+                self.executor.execute(
+                    registry_item,
+                    task_attempt.block_number,
+                    task_attempt.args_dict,
+                    queue=queue,
+                )
                 retry_count += 1
 
                 logger.info(
@@ -131,6 +137,7 @@ class BlockProcessor:
                     task_id=task_attempt.id,
                     block_number=task_attempt.block_number,
                     attempt_count=task_attempt.attempt_count,
+                    queue=queue,
                 )
             except Exception:
                 logger.exception(

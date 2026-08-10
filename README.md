@@ -41,7 +41,8 @@ Register functions -> detect new blocks -> evaluate conditions -> send to Celery
 - Tasks are created for matching conditions (with optional multiple argument sets)
 
 4. Queue
-Tasks are sent to Celery with queue and timeout settings from celery_kwargs
+Tasks are sent to Celery with queue and timeout settings from `celery_kwargs`. Backfill
+submissions can be routed per task with the `backfill_queue` decorator argument.
 
 5. Execute
 Celery runs the function with block info, capturing results and errors
@@ -126,6 +127,22 @@ In separate terminals, start Celery workers to execute tasks:
 $ celery -A your_project worker --loglevel=info
 ```
 
+When tasks declare `backfill_queue="block-backfill"`, use dedicated worker pools so live
+work always retains execution capacity:
+
+```bash
+# Default/live queue only
+$ celery -A your_project worker --loglevel=info --queues=celery --hostname=live@%h
+
+# Backfill queue only
+$ celery -A your_project worker --loglevel=info --queues=block-backfill --hostname=backfill@%h
+```
+
+Celery's default queue is named `celery` unless your application changes
+`CELERY_TASK_DEFAULT_QUEUE`. Include every live queue named by a task's `celery_kwargs`
+in the live worker's `--queues` list and every task-specific `backfill_queue` in the
+corresponding backfill workers' lists.
+
 See examples below:
 
 Use the `@block_task` decorator with lambda conditions to create block processing tasks:
@@ -149,7 +166,8 @@ def process_every_10_blocks(block_number: int):
     condition=lambda bn, netuid: bn % 100 == 0,
     args=[{"netuid": 1}, {"netuid": 3}, {"netuid": 22}],
     backfilling_lookback=300,
-    celery_kwargs={"queue": "high-priority"}
+    backfill_queue="high-priority-backfill",
+    celery_kwargs={"queue": "high-priority"},
 )
 def process_multi_netuid_task(block_number: int, netuid: int):
     print(f"Processing block {block_number} for netuid: {netuid}")
@@ -171,7 +189,7 @@ bounded to at most `N` blocks of catch-up per head.
 
 ```python
 # On each new head, also (re)fill the previous 300 blocks for this task
-@block_task(backfilling_lookback=300)
+@block_task(backfilling_lookback=300, backfill_queue="index-backfill")
 def index_recent_blocks(block_number: int):
     ...
 ```
@@ -180,6 +198,17 @@ Only tasks that declare `backfilling_lookback` are backfilled this way. Already-
 and in-flight (`PENDING`/`RUNNING`) blocks are skipped; failed blocks are retried subject
 to the normal retry backoff. The whole mechanism can be disabled globally with
 `BLOCK_DUMPER_LOOKBACK_ENABLED = False` (see [Configuration Options Reference](#configuration-options-reference)).
+
+Set `backfill_queue` on a task to route its lookback submissions away from its normal
+queue. The same queue is also used by the historical backfill command. Current-head
+submissions continue to use the queue from the task's `celery_kwargs`, or Celery's
+default queue when none is declared. If `backfill_queue` is omitted, backfill and live
+submissions use the same routing. Leading and trailing whitespace is stripped from a
+configured `backfill_queue`; values that are empty after stripping, or are not strings,
+raise `ValueError` when the task is decorated. Automatic retries preserve the queue used
+for the original submission — it is recorded on the `TaskAttempt` row, so retries
+re-dispatched by a worker and retries recovered from the database after a restart both
+stay on it.
 
 ### 2. Historical backfill command (`backfill_blocks_v1`)
 
@@ -204,6 +233,8 @@ python manage.py backfill_blocks_v1 --from-block 1000000 --to-block 1100000 --ra
 If `--from-block` / `--to-block` are omitted, they default to the min / max block already
 present in the database. Blocks older than ~300 from the current head are automatically
 fetched via the archive network.
+
+The historical command honors each task's `backfill_queue` annotation.
 
 
 ## Maintenance Tasks
@@ -388,7 +419,8 @@ BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 720  # 12 hours max
 The repository includes a complete working example in the `example_project/` directory that demonstrates:
 
 - Django application setup with abstract-block-dumper
-- Multiple task types defined with `@block_task` (every-block, conditional, multi-netuid, and `backfilling_lookback`)
+- Multiple task types defined with `@block_task` (every-block, conditional, multi-netuid,
+  `backfilling_lookback`, and task-specific `backfill_queue` routing)
 - Error handling with a randomly failing task
 - Docker Compose setup with all required services
 - Monitoring with Flower (Celery monitoring tool)

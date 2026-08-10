@@ -55,7 +55,10 @@ class WindowBackfiller:
         if use_archive:
             increment_archive_network_usage()
 
-        self.executor.execute(registry_item, block_number, args, use_archive=use_archive)
+        execute_kwargs: dict[str, Any] = {"use_archive": use_archive}
+        if registry_item.backfill_queue is not None:
+            execute_kwargs["queue"] = registry_item.backfill_queue
+        self.executor.execute(registry_item, block_number, args, **execute_kwargs)
         return True
 
     def process_item_range(

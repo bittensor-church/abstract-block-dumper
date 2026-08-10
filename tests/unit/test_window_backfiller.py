@@ -12,9 +12,9 @@ from abstract_block_dumper.models import TaskAttempt
 from abstract_block_dumper.v1.decorators import block_task
 
 
-def _make_item(condition=lambda bn, **kw: True, args=None):
+def _make_item(condition=lambda bn, **kw: True, args=None, backfill_queue=None):
     fn = MagicMock(__name__="dummy_task")
-    return RegistryItem(condition=condition, function=fn, args=args)
+    return RegistryItem(condition=condition, function=fn, args=args, backfill_queue=backfill_queue)
 
 
 def test_submit_block_skips_already_executed():
@@ -72,6 +72,38 @@ def test_submit_block_passes_args_through():
 
     assert submitted is True
     executor.execute.assert_called_once_with(item, 100, {"netuid": 5}, use_archive=False)
+
+
+def test_submit_block_routes_to_task_backfill_queue():
+    executor = MagicMock()
+    wb = WindowBackfiller(executor)
+    item = _make_item(backfill_queue="block-backfill")
+
+    submitted = wb.submit_block(item, 100, {}, executed_blocks=set(), head_block=100)
+
+    assert submitted is True
+    executor.execute.assert_called_once_with(
+        item,
+        100,
+        {},
+        use_archive=False,
+        queue="block-backfill",
+    )
+
+
+def test_submit_block_routes_each_task_to_its_own_backfill_queue():
+    executor = MagicMock()
+    wb = WindowBackfiller(executor)
+    first_item = _make_item(backfill_queue="first-backfill")
+    second_item = _make_item(backfill_queue="second-backfill")
+
+    wb.submit_block(first_item, 100, {}, executed_blocks=set(), head_block=100)
+    wb.submit_block(second_item, 100, {}, executed_blocks=set(), head_block=100)
+
+    assert executor.execute.call_args_list == [
+        ((first_item, 100, {}), {"use_archive": False, "queue": "first-backfill"}),
+        ((second_item, 100, {}), {"use_archive": False, "queue": "second-backfill"}),
+    ]
 
 
 def _every_block(block_number: int):

@@ -23,6 +23,11 @@ class TaskAttempt(models.Model):
     celery_task_id = models.CharField(max_length=50, blank=True, null=True)
     execution_result = models.JSONField(null=True)
 
+    # Routing: the queue override used for the original submission, so retries and
+    # recovered retries can be re-dispatched to the same queue. NULL means "no
+    # override", i.e. the task's own `celery_kwargs` queue or Celery's default.
+    celery_queue_override = models.CharField(max_length=255, blank=True, null=True)
+
     # Retry Management
     last_attempted_at = models.DateTimeField(null=True, blank=True)
     attempt_count = models.PositiveIntegerField(default=0)

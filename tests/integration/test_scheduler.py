@@ -9,12 +9,19 @@ import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.dal.memory_registry import task_registry
 from abstract_block_dumper._internal.providers.bittensor_client import BittensorConnectionClient
 from abstract_block_dumper._internal.services.block_processor import block_processor_factory
+from abstract_block_dumper._internal.services.executor import CeleryExecutor
 from abstract_block_dumper.models import TaskAttempt
 from abstract_block_dumper.v1.decorators import block_task
 from tests.fatories import TaskAttemptFactory
 
 
 def failing_task(block_number: int):
+    raise ValueError("Task failed")
+
+
+# Needs its own name: Celery's task registry is global and keyed by name, so re-registering
+# `failing_task` with different celery_kwargs would return the first registration's options.
+def prioritised_failing_task(block_number: int):
     raise ValueError("Task failed")
 
 
@@ -114,6 +121,150 @@ def test_restry_schedules_celery_task_with_eta():
             },
             eta=task_attempt.next_retry_at,
         )
+
+
+def _register_failing_task_submitted_to(queue: str | None, block_number: int):
+    """Register `failing_task` and submit `block_number` to `queue`, as a scheduler would."""
+    executable_path = abd_utils.get_executable_path(failing_task)
+    block_task(failing_task)
+
+    registry_item = task_registry.get_by_executable_path(executable_path)
+    assert registry_item is not None
+
+    with patch.object(registry_item.function, "apply_async"):
+        CeleryExecutor().execute(registry_item, block_number, {}, queue=queue)
+
+    return registry_item, executable_path
+
+
+@pytest.mark.django_db
+def test_backfill_retry_stays_on_backfill_queue():
+    current_block = 100
+    registry_item, executable_path = _register_failing_task_submitted_to("block-backfill", current_block)
+
+    with patch.object(registry_item.function, "apply_async") as mock_apply_async:
+        registry_item.function(current_block)
+
+        task_attempt = TaskAttempt.objects.get(
+            block_number=current_block,
+            executable_path=executable_path,
+        )
+        mock_apply_async.assert_called_once_with(
+            kwargs={"block_number": current_block},
+            eta=task_attempt.next_retry_at,
+            queue="block-backfill",
+        )
+
+
+@pytest.mark.django_db
+def test_recovered_backfill_retry_stays_on_backfill_queue():
+    """The queue survives a scheduler restart: recovery rebuilds it from the database."""
+    current_block = 100
+    registry_item, executable_path = _register_failing_task_submitted_to("block-backfill", current_block)
+
+    task_attempt = TaskAttempt.objects.get(block_number=current_block, executable_path=executable_path)
+    task_attempt.status = TaskAttempt.Status.FAILED
+    task_attempt.attempt_count = 1
+    task_attempt.next_retry_at = timezone.now() - timedelta(minutes=5)
+    task_attempt.save()
+
+    with patch.object(registry_item.function, "apply_async") as mock_apply_async:
+        block_processor_factory().recover_failed_retries(poll_interval=0)
+
+    task_attempt.refresh_from_db()
+    mock_apply_async.assert_called_once_with(
+        kwargs={"block_number": current_block, "_use_archive_network": False},
+        eta=task_attempt.next_retry_at,
+        queue="block-backfill",
+    )
+    assert task_attempt.celery_queue_override == "block-backfill"
+
+
+@pytest.mark.django_db
+def test_task_level_queue_is_not_recorded_and_survives_retries():
+    """`celery_kwargs={"queue": ...}` is a Celery task-level default, not a recorded override."""
+    current_block = 100
+    executable_path = abd_utils.get_executable_path(prioritised_failing_task)
+    block_task(celery_kwargs={"queue": "high-priority"})(prioritised_failing_task)
+
+    registry_item = task_registry.get_by_executable_path(executable_path)
+    assert registry_item is not None
+    # Celery applies this whenever apply_async does not pass an explicit queue.
+    assert registry_item.function.queue == "high-priority"
+
+    with patch.object(registry_item.function, "apply_async"):
+        CeleryExecutor().execute(registry_item, current_block, {})
+
+    task_attempt = TaskAttempt.objects.get(block_number=current_block, executable_path=executable_path)
+    assert task_attempt.celery_queue_override is None
+
+    with patch.object(registry_item.function, "apply_async") as mock_apply_async:
+        registry_item.function(current_block)
+
+        task_attempt.refresh_from_db()
+        # No explicit queue, so the retry falls through to the task-level "high-priority".
+        mock_apply_async.assert_called_once_with(
+            kwargs={"block_number": current_block},
+            eta=task_attempt.next_retry_at,
+        )
+        assert task_attempt.celery_queue_override is None
+
+
+@pytest.mark.django_db
+def test_task_backfill_queue_overrides_live_queue_and_survives_retries():
+    current_block = 100
+    executable_path = abd_utils.get_executable_path(prioritised_failing_task)
+    block_task(
+        celery_kwargs={"queue": "high-priority"},
+        backfill_queue="high-priority-backfill",
+    )(prioritised_failing_task)
+
+    registry_item = task_registry.get_by_executable_path(executable_path)
+    assert registry_item is not None
+
+    with patch.object(registry_item.function, "apply_async") as mock_apply_async:
+        CeleryExecutor().execute(registry_item, current_block, {}, queue=registry_item.backfill_queue)
+        assert mock_apply_async.call_args.kwargs["queue"] == "high-priority-backfill"
+
+    task_attempt = TaskAttempt.objects.get(block_number=current_block, executable_path=executable_path)
+    assert task_attempt.celery_queue_override == "high-priority-backfill"
+
+    with patch.object(registry_item.function, "apply_async") as mock_apply_async:
+        registry_item.function(current_block)
+
+        task_attempt.refresh_from_db()
+        mock_apply_async.assert_called_once_with(
+            kwargs={"block_number": current_block},
+            eta=task_attempt.next_retry_at,
+            queue="high-priority-backfill",
+        )
+        assert task_attempt.celery_queue_override == "high-priority-backfill"
+
+
+@pytest.mark.django_db
+def test_live_retry_is_unaffected_by_a_task_backfill_queue():
+    """A live submission records no queue, so it must not be pulled onto the backfill queue."""
+    current_block = 100
+    executable_path = abd_utils.get_executable_path(failing_task)
+    block_task(backfill_queue="block-backfill")(failing_task)
+    registry_item = task_registry.get_by_executable_path(executable_path)
+    assert registry_item is not None
+
+    with patch.object(registry_item.function, "apply_async"):
+        CeleryExecutor().execute(registry_item, current_block, {})
+
+    with patch.object(registry_item.function, "apply_async") as mock_apply_async:
+        registry_item.function(current_block)
+
+        task_attempt = TaskAttempt.objects.get(
+            block_number=current_block,
+            executable_path=executable_path,
+        )
+        mock_apply_async.assert_called_once_with(
+            kwargs={"block_number": current_block},
+            eta=task_attempt.next_retry_at,
+        )
+        assert task_attempt.celery_queue_override is None
 
 
 @pytest.mark.django_db
