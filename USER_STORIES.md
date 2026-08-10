@@ -80,6 +80,8 @@ stays simple.
 
 - `@block_task` (no parentheses) and `@block_task()` are both valid and equivalent.
 - With no `condition`, the task runs for every block the scheduler processes.
+- By default, the task processes the latest chain head. `finalized=True` makes it process
+  blocks as they are finalized instead, so different nodes agree on the block being handled.
 - The decorated function must accept `block_number: int` as a keyword argument — the
   library always invokes it as `func(block_number=..., **args)`.
 - The decorator returns the Celery task object, so `.delay()` / `.apply_async()` are
@@ -161,11 +163,11 @@ registry file to maintain.
 is a normal process I can supervise.
 
 - `python manage.py block_tasks_v1` discovers tasks, reports the count, connects to the
-  chain, and polls forever.
+  chain, and consumes block streams forever.
 - It connects to the network in `BITTENSOR_NETWORK` (default `finney`).
 - `Ctrl+C` stops it cleanly and closes the subtensor connections.
-- Any unexpected error inside the poll loop is logged and the loop continues after one
-  poll interval — a transient RPC failure must not kill the daemon.
+- Any unexpected error inside the scheduler loop is logged and the loop continues after
+  one processing interval — a transient RPC failure must not kill the daemon.
 
 ### US-3.2 — Predictable starting point
 **As an** operator, **I want** to control where processing begins, **so that** a fresh
@@ -179,16 +181,18 @@ deployment does not surprise me.
 - See [Known gaps](#known-gaps-and-non-goals) for what "start from an old block" does
   **not** do today.
 
-### US-3.3 — Tune polling
-**As an** operator, **I want** to trade latency against chain-node load, **so that** I can
-match my node's rate limits.
+### US-3.3 — Tune processing cadence
+**As an** operator, **I want** to trade processing latency against scheduler activity,
+**so that** I can control how aggressively buffered blocks are drained.
 
-- `BLOCK_DUMPER_POLL_INTERVAL` is the sleep between head checks; the code default is `5`
-  seconds.
-- The scheduler processes the head block only, and skips work when the head has not
-  advanced since the last poll.
-- A poll interval longer than the block time means intermediate blocks are not seen by the
-  live loop; `backfilling_lookback` (§5) is the supported way to close that gap.
+- `BLOCK_DUMPER_POLL_INTERVAL` is the sleep between processing passes over the configured
+  block streams; the code default is `5` seconds.
+- Default tasks follow the latest-block stream and `finalized=True` tasks follow the
+  finalized-block stream. Each stream is opened once and reused.
+- Block headers remain buffered by a healthy subscription while the scheduler sleeps, so a
+  long interval adds latency rather than deliberately skipping intermediate blocks.
+- `backfilling_lookback` (§5) closes gaps caused by scheduler downtime or a disconnected
+  subscription.
 
 ---
 
@@ -276,9 +280,10 @@ trustworthy.
 **As a** task author, **I want** a task to keep its own recent history complete, **so
 that** short scheduler outages heal without operator action.
 
-- `@block_task(backfilling_lookback=N)`: on every new head `H`, the live scheduler also
-  submits any block in `[H-N, H-1]` for that task that has not already succeeded and is not
-  in flight, still honoring `condition`.
+- `@block_task(backfilling_lookback=N)`: on every new selected head `H`, the live scheduler
+  also submits any block in `[H-N, H-1]` for that task that has not already succeeded and
+  is not in flight, still honoring `condition`. For `finalized=True` tasks, `H` is the
+  finalized head.
 - Blocks already `SUCCESS` are skipped; blocks `PENDING`/`RUNNING` are skipped so nothing is
   dispatched twice; `FAILED` blocks are re-submitted subject to the normal backoff.
 - Skipping is evaluated **per args set**, so a multi-args task heals each netuid
@@ -286,7 +291,7 @@ that** short scheduler outages heal without operator action.
 - Only tasks that declare `backfilling_lookback` are backfilled this way; catch-up per head
   is bounded to `N` blocks.
 - A failure while filling one task's window is logged and does not stop the other tasks or
-  the poll loop.
+  the scheduler loop.
 - `BLOCK_DUMPER_LOOKBACK_ENABLED = False` disables the mechanism globally without editing
   task code.
 
@@ -344,14 +349,16 @@ large backfill cannot starve real-time processing.
   `celery_kwargs` queue for backfill submissions only.
 - Different tasks can declare different backfill queues. A task that omits the argument
   uses its normal Celery routing for backfills.
-- Current-head (live) submissions keep the task-level or default queue.
+- Live submissions at either the latest or finalized head keep the task-level or default
+  queue.
 - Leading and trailing whitespace is stripped from the queue name. A value that is empty
   after stripping, or is not a string, raises `ValueError` rather than routing work to a
   nonsense queue name.
 - Capacity isolation only materializes if workers are run with disjoint `--queues` lists;
   the documentation says so explicitly.
 - Documented caveat: the live scheduler still scans lookback windows synchronously after
-  each head, so very large windows can delay the next poll even with queue isolation.
+  each head, so very large windows can delay the next block-stream read even with queue
+  isolation.
 
 ---
 
@@ -436,7 +443,7 @@ Every setting is read with `getattr(settings, ..., default)` — none is mandato
 | --- | --- | --- | --- |
 | `BITTENSOR_NETWORK` | `str` | `'finney'` | Network for the live scheduler |
 | `BLOCK_DUMPER_START_FROM_BLOCK` | `str \| int \| None` | `None` | Starting point (US-3.2) |
-| `BLOCK_DUMPER_POLL_INTERVAL` | `int` | `5` | Seconds between head checks |
+| `BLOCK_DUMPER_POLL_INTERVAL` | `int` | `5` | Seconds between block-stream processing passes |
 | `BLOCK_DUMPER_LOOKBACK_ENABLED` | `bool` | `True` | Global kill-switch for `backfilling_lookback` |
 | `BLOCK_DUMPER_MAX_ATTEMPTS` | `int` | `3` | Maximum attempts before giving up |
 | `BLOCK_TASK_RETRY_BACKOFF` | `int` | `1` | Exponential backoff base, in minutes |
@@ -488,13 +495,14 @@ expectations and current behavior diverge, or where a boundary is intentional.
    task with no lookback whose retry message is lost (worker crash, broker purge) is not
    picked back up automatically today.
 2. **`BLOCK_DUMPER_START_FROM_BLOCK` does not replay history.** The live scheduler
-   processes the head block only. Setting an old integer sets the initial
-   `last_processed_block`, but the very next poll jumps to the current head; no intermediate
-   blocks are processed. Historical coverage comes from `backfill_blocks_v1` or from
-   `backfilling_lookback`, not from this setting.
-3. **The live loop is head-only.** Blocks that pass between polls are never processed by the
-   live scheduler on their own. Any task that must not miss blocks needs
-   `backfilling_lookback` set to at least the worst-case number of blocks per poll interval.
+   consumes live block streams only. Setting an old integer sets the initial
+   `last_processed_block`, but the first stream snapshot starts at the current head; no
+   intermediate history is replayed. Historical coverage comes from `backfill_blocks_v1`
+   or from `backfilling_lookback`, not from this setting.
+3. **Subscriptions do not recover disconnected history.** Latest and finalized block
+   headers are buffered while their subscriptions are healthy. After scheduler downtime or
+   a disconnection, a new subscription resumes at the node's current head. Tasks that must
+   repair those gaps need `backfilling_lookback` or an explicit historical backfill.
 4. **No metrics HTTP endpoint is shipped.** The package records metrics into the default
    Prometheus registry; exposing `/metrics` (via `django-prometheus`, `start_http_server`,
    or a sidecar) is the host project's responsibility. The scheduler and the backfill
@@ -505,9 +513,10 @@ expectations and current behavior diverge, or where a boundary is intentional.
 6. **Exceptions are not publicly importable.** `AbstractBlockDumperError`,
    `ConditionEvaluationError`, and `CeleryTaskLockedError` live in `_internal`, so user code
    has no stable path for catching them.
-7. **Lookback filling is synchronous.** Window scanning runs inline in the poll loop after
-   each head is scheduled, so a large `backfilling_lookback` across many tasks delays the
-   next poll. Queue isolation protects worker capacity, not scheduler latency.
+7. **Lookback filling is synchronous.** Window scanning runs inline in the scheduler loop
+   after each head is scheduled, so a large `backfilling_lookback` across many tasks delays
+   the next block-stream read. Queue isolation protects worker capacity, not scheduler
+   latency.
 8. **Gap detection is block-level, not task-level.** `backfill_blocks_v1` treats a block as
    "processed" if *any* task succeeded for it. A block where one task of several succeeded
    is not reported as a gap; the per-task skip logic still prevents duplicate work, but the

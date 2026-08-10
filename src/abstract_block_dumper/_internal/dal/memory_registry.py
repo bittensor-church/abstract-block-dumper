@@ -7,6 +7,7 @@ import structlog
 from celery import Task
 
 from abstract_block_dumper._internal.exceptions import ConditionEvaluationError
+from abstract_block_dumper._internal.services.block_source import LATEST_BLOCK_SOURCE, BlockSource
 
 logger = structlog.getLogger(__name__)
 
@@ -16,6 +17,7 @@ class RegistryItem:
     condition: Callable[..., bool]
     function: Task
     args: list[dict[str, Any]] | None = None
+    block_source: BlockSource = LATEST_BLOCK_SOURCE
     backfilling_lookback: int | None = None
     backfill_queue: str | None = None
     celery_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -78,6 +80,7 @@ class MemoryRegistry(BaseRegistry):
             function_name=item.function.__name__,
             executable_path=item.executable_path,
             args_counter=len(item.args or []),
+            block_source=item.block_source.name,
             backfilling_lookback=item.backfilling_lookback,
             backfill_queue=item.backfill_queue,
         )

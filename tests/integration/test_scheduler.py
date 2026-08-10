@@ -1,6 +1,7 @@
 from datetime import timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
+import bittensor as bt
 import pytest
 from django.utils import timezone
 
@@ -336,3 +337,33 @@ def test_bittensor_client_uses_archive_for_old_blocks(
     just_over_threshold_block = 699  # 301 blocks behind
     result = client.get_subtensor_for_block(just_over_threshold_block)
     assert result is mock_archive_subtensor
+
+
+def test_bittensor_client_reads_each_block_source_from_one_subscription() -> None:
+    subtensor = MagicMock()
+    streams = {
+        False: iter(
+            [
+                bt.BlockHeader(number=1000, parent_hash=None, raw={}),
+                bt.BlockHeader(number=1001, parent_hash=None, raw={}),
+            ]
+        ),
+        True: iter(
+            [
+                bt.BlockHeader(number=998, parent_hash=None, raw={}),
+                bt.BlockHeader(number=999, parent_hash=None, raw={}),
+            ]
+        ),
+    }
+    subtensor.blocks.side_effect = lambda *, finalized: streams[finalized]
+    client = BittensorConnectionClient(network="test")
+    client._subtensor = subtensor
+
+    assert client.get_block() == 1000
+    assert client.get_block(finalized=True) == 998
+    assert client.get_block() == 1001
+    assert client.get_block(finalized=True) == 999
+    assert subtensor.blocks.call_args_list == [
+        call(finalized=False),
+        call(finalized=True),
+    ]

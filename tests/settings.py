@@ -46,7 +46,7 @@ CELERY_RESULT_BACKEND = "cache+memory://"
 # Abstract Block Dumper specific settings
 # ----------------------------------
 BITTENSOR_NETWORK = "finney"  # or 'local', 'mainnet',
-BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds - ultra-fast polling for real-time processing
+BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between block-stream processing passes
 BLOCK_DUMPER_START_FROM_BLOCK = "current"  # None = resume from DB, 'current' = current block, or block number
 BLOCK_TASK_RETRY_BACKOFF = 2
 BLOCK_DUMPER_MAX_ATTEMPTS = 3

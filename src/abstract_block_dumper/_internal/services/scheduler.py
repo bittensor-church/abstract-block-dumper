@@ -5,8 +5,10 @@ import structlog
 from django.conf import settings
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
+from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
 from abstract_block_dumper._internal.providers.bittensor_client import BittensorConnectionClient
 from abstract_block_dumper._internal.services.block_processor import BaseBlockProcessor, block_processor_factory
+from abstract_block_dumper._internal.services.block_source import BlockSource
 from abstract_block_dumper._internal.services.metrics import (
     BlockProcessingTimer,
     increment_blocks_processed,
@@ -58,6 +60,7 @@ class TaskScheduler:
         self.poll_interval = poll_interval
         self.bittensor_client = bittensor_client
         self.last_processed_block = state_resolver.get_starting_block()
+        self.last_processed_blocks: dict[BlockSource, int] = {}
         self.is_running = False
         self.window_backfiller = window_backfiller
         self.lookback_enabled = lookback_enabled
@@ -65,7 +68,10 @@ class TaskScheduler:
     def start(self) -> None:
         self.is_running = True
 
-        registered_tasks_count = len(self.block_processor.registry.get_functions())
+        registry_functions = self.block_processor.registry.get_functions()
+        registered_tasks_count = len(registry_functions)
+        task_groups = self._group_by_block_source(registry_functions)
+        self.last_processed_blocks = dict.fromkeys(task_groups, self.last_processed_block)
         set_registered_tasks(registered_tasks_count)
 
         logger.info(
@@ -76,19 +82,21 @@ class TaskScheduler:
 
         while self.is_running:
             try:
-                current_block = self.bittensor_client.subtensor.block
+                for block_source, registry_items in task_groups.items():
+                    current_block = block_source.get_block(self.bittensor_client)
+                    if current_block <= self.last_processed_blocks[block_source]:
+                        continue
 
-                # Only process the current head block, skip if already processed
-                if current_block != self.last_processed_block:
                     with BlockProcessingTimer(mode="realtime"):
-                        self.block_processor.process_block(current_block)
+                        self.block_processor.process_block(current_block, registry_items=registry_items)
 
-                    self._fill_lookback(current_block)
+                    self._fill_lookback(current_block, registry_items=registry_items)
 
                     set_current_block("realtime", current_block)
                     increment_blocks_processed("realtime")
-                    set_block_lag("realtime", 0)  # Head-only mode has no lag
-                    self.last_processed_block = current_block
+                    set_block_lag("realtime", 0)
+                    self.last_processed_blocks[block_source] = current_block
+                    self.last_processed_block = max(self.last_processed_blocks.values())
 
                 time.sleep(self.poll_interval)
 
@@ -100,7 +108,19 @@ class TaskScheduler:
                 logger.exception("Error in TaskScheduler loop")
                 time.sleep(self.poll_interval)
 
-    def _fill_lookback(self, head: int) -> None:
+    @staticmethod
+    def _group_by_block_source(registry_items: list[RegistryItem]) -> dict[BlockSource, list[RegistryItem]]:
+        task_groups: dict[BlockSource, list[RegistryItem]] = {}
+        for registry_item in registry_items:
+            task_groups.setdefault(registry_item.block_source, []).append(registry_item)
+        return task_groups
+
+    def _fill_lookback(
+        self,
+        head: int,
+        *,
+        registry_items: list[RegistryItem] | None = None,
+    ) -> None:
         """
         Backfill the trailing lookback window for tasks that declare one.
 
@@ -110,7 +130,8 @@ class TaskScheduler:
         if not self.lookback_enabled:
             return
 
-        for registry_item in self.block_processor.registry.get_functions():
+        items = registry_items if registry_items is not None else self.block_processor.registry.get_functions()
+        for registry_item in items:
             if not registry_item.requires_backfilling():
                 continue
 

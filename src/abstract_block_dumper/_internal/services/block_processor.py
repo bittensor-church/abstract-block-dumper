@@ -1,5 +1,6 @@
 import itertools
 import time
+from collections.abc import Iterable
 from typing import Protocol
 
 import structlog
@@ -20,7 +21,12 @@ class BaseBlockProcessor(Protocol):
     executor: CeleryExecutor
     registry: BaseRegistry
 
-    def process_block(self, block_number: int) -> None:
+    def process_block(
+        self,
+        block_number: int,
+        *,
+        registry_items: Iterable[RegistryItem] | None = None,
+    ) -> None:
         """Process a single block - executes registered tasks for this block only."""
         ...
 
@@ -39,9 +45,15 @@ class BlockProcessor:
         self.registry = registry
         self._cleanup_phantom_tasks()
 
-    def process_block(self, block_number: int) -> None:
+    def process_block(
+        self,
+        block_number: int,
+        *,
+        registry_items: Iterable[RegistryItem] | None = None,
+    ) -> None:
         """Process a single block - executes registered tasks for this block only."""
-        for registry_item in self.registry.get_functions():
+        items = registry_items if registry_items is not None else self.registry.get_functions()
+        for registry_item in items:
             try:
                 self.process_registry_item(registry_item, block_number)
             except Exception:

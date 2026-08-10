@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import bittensor as bt
@@ -31,6 +32,7 @@ class BittensorConnectionClient:
         self._subtensor: bt.Subtensor | None = None
         self._archive_subtensor: bt.Subtensor | None = None
         self._current_block_cache: int | None = None
+        self._block_streams: dict[bool, Iterator[bt.BlockHeader]] = {}
 
     def __enter__(self) -> BittensorConnectionClient:
         """Context manager entry."""
@@ -47,6 +49,8 @@ class BittensorConnectionClient:
 
     def close(self) -> None:
         """Close all subtensor connections to prevent memory leaks."""
+        self._block_streams.clear()
+
         if self._subtensor is not None:
             try:
                 self._subtensor.close()
@@ -63,6 +67,17 @@ class BittensorConnectionClient:
 
         self._current_block_cache = None
         logger.debug("Subtensor connections closed")
+
+    def get_block(self, *, finalized: bool = False) -> int:
+        """Return the next block number from the selected chain subscription."""
+        if finalized not in self._block_streams:
+            self._block_streams[finalized] = self.subtensor.blocks(finalized=finalized)
+
+        try:
+            return next(self._block_streams[finalized]).number
+        except Exception:
+            self._block_streams.pop(finalized, None)
+            raise
 
     def get_for_block(self, block_number: int) -> bt.Subtensor:
         """Get the appropriate subtensor client for the given block number."""
