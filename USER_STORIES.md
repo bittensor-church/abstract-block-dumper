@@ -123,7 +123,8 @@ I can set the queue, timeouts, or retry policy for a specific task.
   backfill submissions to a separate queue without changing its live routing.
 - If `backfill_queue` is omitted, backfill submissions use the task's `celery_kwargs`
   routing or Celery's default queue, exactly like live submissions.
-- A blank or non-string `backfill_queue` raises `ValueError` at import time.
+- Leading and trailing whitespace in `backfill_queue` is stripped before the queue is used.
+- A value that is blank after stripping, or is not a string, raises `ValueError` at import time.
 - With no `queue`, submissions go to Celery's default queue
   (`CELERY_TASK_DEFAULT_QUEUE`, normally `celery`).
 
@@ -344,8 +345,9 @@ large backfill cannot starve real-time processing.
 - Different tasks can declare different backfill queues. A task that omits the argument
   uses its normal Celery routing for backfills.
 - Current-head (live) submissions keep the task-level or default queue.
-- An empty or non-string value raises `ValueError` rather than routing work to a nonsense
-  queue name.
+- Leading and trailing whitespace is stripped from the queue name. A value that is empty
+  after stripping, or is not a string, raises `ValueError` rather than routing work to a
+  nonsense queue name.
 - Capacity isolation only materializes if workers are run with disjoint `--queues` lists;
   the documentation says so explicitly.
 - Documented caveat: the live scheduler still scans lookback windows synchronously after

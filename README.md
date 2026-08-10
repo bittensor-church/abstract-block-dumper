@@ -203,9 +203,12 @@ Set `backfill_queue` on a task to route its lookback submissions away from its n
 queue. The same queue is also used by the historical backfill command. Current-head
 submissions continue to use the queue from the task's `celery_kwargs`, or Celery's
 default queue when none is declared. If `backfill_queue` is omitted, backfill and live
-submissions use the same routing. Automatic retries preserve the queue used for the
-original submission — it is recorded on the `TaskAttempt` row, so retries re-dispatched
-by a worker and retries recovered from the database after a restart both stay on it.
+submissions use the same routing. Leading and trailing whitespace is stripped from a
+configured `backfill_queue`; values that are empty after stripping, or are not strings,
+raise `ValueError` when the task is decorated. Automatic retries preserve the queue used
+for the original submission — it is recorded on the `TaskAttempt` row, so retries
+re-dispatched by a worker and retries recovered from the database after a restart both
+stay on it.
 
 ### 2. Historical backfill command (`backfill_blocks_v1`)
 

@@ -36,6 +36,7 @@ def schedule_retry(task_attempt: TaskAttempt) -> None:
             block_number=task_attempt.block_number,
             executable_path=task_attempt.executable_path,
         )
+        return
 
     if task_attempt.status != TaskAttempt.Status.FAILED:
         logger.warning(
