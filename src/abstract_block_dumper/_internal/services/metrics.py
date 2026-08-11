@@ -47,7 +47,9 @@ if PROMETHEUS_AVAILABLE:
     BLOCKS_PROCESSED = Counter(  # type: ignore
         "block_dumper_blocks_processed_total",
         "Total blocks processed",
-        ["mode"],  # 'realtime' or 'backfill'
+        # mode: 'realtime' or 'backfill'. source: the chain head the blocks were read
+        # from ('latest' or 'finalized'), which advance independently of each other.
+        ["mode", "source"],
     )
     TASKS_SUBMITTED = Counter(  # type: ignore
         "block_dumper_tasks_submitted_total",
@@ -57,7 +59,7 @@ if PROMETHEUS_AVAILABLE:
     CURRENT_BLOCK = Gauge(  # type: ignore
         "block_dumper_current_block",
         "Current block being processed",
-        ["mode"],
+        ["mode", "source"],
     )
     BACKFILL_PROGRESS = Gauge(  # type: ignore
         "block_dumper_backfill_progress_percent",
@@ -74,7 +76,7 @@ if PROMETHEUS_AVAILABLE:
     BLOCK_PROCESSING_TIME = Histogram(  # type: ignore
         "block_dumper_block_processing_seconds",
         "Time spent processing each block",
-        ["mode"],
+        ["mode", "source"],
     )
     # Task-level metrics
     TASK_EXECUTIONS = Counter(  # type: ignore
@@ -97,7 +99,7 @@ if PROMETHEUS_AVAILABLE:
     BLOCK_LAG = Gauge(  # type: ignore
         "block_dumper_block_lag",
         "Number of blocks behind the chain head",
-        ["mode"],  # 'realtime' or 'backfill'
+        ["mode", "source"],
     )
     PENDING_TASKS = Gauge(  # type: ignore
         "block_dumper_pending_tasks",
@@ -113,10 +115,10 @@ if PROMETHEUS_AVAILABLE:
     )
 
 
-def increment_blocks_processed(mode: str) -> None:
-    """Increment the blocks processed counter."""
+def increment_blocks_processed(mode: str, *, source: str) -> None:
+    """Increment the blocks processed counter for one chain head."""
     if PROMETHEUS_AVAILABLE and BLOCKS_PROCESSED is not None:
-        BLOCKS_PROCESSED.labels(mode=mode).inc()
+        BLOCKS_PROCESSED.labels(mode=mode, source=source).inc()
 
 
 def increment_tasks_submitted(task_name: str) -> None:
@@ -125,10 +127,10 @@ def increment_tasks_submitted(task_name: str) -> None:
         TASKS_SUBMITTED.labels(task_name=task_name).inc()
 
 
-def set_current_block(mode: str, block_number: int) -> None:
-    """Set the current block being processed."""
+def set_current_block(mode: str, block_number: int, *, source: str) -> None:
+    """Set the current block being processed for one chain head."""
     if PROMETHEUS_AVAILABLE and CURRENT_BLOCK is not None:
-        CURRENT_BLOCK.labels(mode=mode).set(block_number)
+        CURRENT_BLOCK.labels(mode=mode, source=source).set(block_number)
 
 
 def set_backfill_progress(from_block: int, to_block: int, current_block: int) -> None:
@@ -149,10 +151,10 @@ def set_backfill_progress(from_block: int, to_block: int, current_block: int) ->
             BACKFILL_PROGRESS.set(progress)
 
 
-def set_block_lag(mode: str, lag: int) -> None:
-    """Set the current block lag (distance from chain head)."""
+def set_block_lag(mode: str, lag: int, *, source: str) -> None:
+    """Set the current block lag (distance from chain head) for one chain head."""
     if PROMETHEUS_AVAILABLE and BLOCK_LAG is not None:
-        BLOCK_LAG.labels(mode=mode).set(lag)
+        BLOCK_LAG.labels(mode=mode, source=source).set(lag)
 
 
 def set_pending_tasks(count: int) -> None:
@@ -217,13 +219,14 @@ class TaskExecutionTimer:
 class BlockProcessingTimer:
     """Context manager for timing block processing."""
 
-    def __init__(self, mode: str) -> None:
+    def __init__(self, mode: str, *, source: str) -> None:
         self.mode = mode
+        self.source = source
         self._timer: Any = None
 
     def __enter__(self) -> Self:
         if PROMETHEUS_AVAILABLE and BLOCK_PROCESSING_TIME is not None:
-            self._timer = BLOCK_PROCESSING_TIME.labels(mode=self.mode).time()
+            self._timer = BLOCK_PROCESSING_TIME.labels(mode=self.mode, source=self.source).time()
             self._timer.__enter__()  # Start the timer
         return self
 

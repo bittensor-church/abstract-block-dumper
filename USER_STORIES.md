@@ -174,10 +174,14 @@ is a normal process I can supervise.
 deployment does not surprise me.
 
 - `BLOCK_DUMPER_START_FROM_BLOCK`:
-  - `None` (default) → resume from the highest `block_number` in the database, or the
-    current head if the database is empty.
-  - `'current'` → start from the current chain head.
-  - integer → start from that block number.
+  - `None` (default) → resume from the highest `block_number` recorded for the tasks that
+    read the same chain head, or that head's current block if none of them has a record.
+  - `'current'` → start from the current block of the chain head each task reads.
+  - integer → start from that block number, for every task.
+- Each chain head keeps its own starting point. The latest head always runs ahead of the
+  finalized one, so a `finalized=True` task that inherited the latest head's position
+  would start past blocks that were produced but not yet finalized, and — because the loop
+  only fires on a strictly higher head — would never process them.
 - See [Known gaps](#known-gaps-and-non-goals) for what "start from an old block" does
   **not** do today.
 
@@ -192,6 +196,11 @@ match my node's rate limits.
   tasks read the finalized head.
 - A poll interval longer than the block time means intermediate blocks are not seen by the
   live loop; `backfilling_lookback` (§5) is the supported way to close that gap.
+- Each head is polled independently: a head whose read or processing fails loses only its
+  own turn and is retried on the next poll, so it cannot starve the other heads.
+- `BLOCK_DUMPER_RPC_TIMEOUT` bounds each raw RPC chain read (code default `30.0` seconds).
+  On timeout the connection is dropped and the next poll reconnects, which keeps a node
+  that stops answering from parking the single scheduler thread.
 
 ---
 
@@ -371,11 +380,11 @@ non-instrumented deployments stay lean.
 
   | Metric | Type | Labels |
   | --- | --- | --- |
-  | `block_dumper_blocks_processed_total` | counter | `mode` (`realtime`/`backfill`) |
+  | `block_dumper_blocks_processed_total` | counter | `mode` (`realtime`/`backfill`), `source` (`latest`/`finalized`) |
   | `block_dumper_tasks_submitted_total` | counter | `task_name` |
-  | `block_dumper_current_block` | gauge | `mode` |
-  | `block_dumper_block_lag` | gauge | `mode` |
-  | `block_dumper_block_processing_seconds` | histogram | `mode` |
+  | `block_dumper_current_block` | gauge | `mode`, `source` |
+  | `block_dumper_block_lag` | gauge | `mode`, `source` |
+  | `block_dumper_block_processing_seconds` | histogram | `mode`, `source` |
   | `block_dumper_task_executions_total` | counter | `task_name`, `status` |
   | `block_dumper_task_execution_seconds` | histogram | `task_name` |
   | `block_dumper_task_retries_total` | counter | `task_name` |
@@ -385,6 +394,13 @@ non-instrumented deployments stay lean.
   | `block_dumper_backfill_progress_percent` | gauge | — |
   | `block_dumper_backfill_from_block` / `_to_block` | gauge | — |
 
+- The `source` label separates the chain heads, which advance independently: without it
+  the finalized head — always the lower block number — would keep overwriting the latest
+  head's gauges.
+- In `realtime`, `block_dumper_block_lag` is the distance between a head's last processed
+  block and the highest block seen across all heads in that poll. A head reports rising lag
+  whenever it stops advancing, whether because finality trails, its reads keep failing, or
+  its blocks fail to process. `finalized` normally sits a few blocks above zero.
 - Exposing the metrics endpoint is the host project's job (see
   [Known gaps](#known-gaps-and-non-goals)).
 
@@ -441,6 +457,7 @@ Every setting is read with `getattr(settings, ..., default)` — none is mandato
 | `BITTENSOR_NETWORK` | `str` | `'finney'` | Network for the live scheduler |
 | `BLOCK_DUMPER_START_FROM_BLOCK` | `str \| int \| None` | `None` | Starting point (US-3.2) |
 | `BLOCK_DUMPER_POLL_INTERVAL` | `int` | `5` | Seconds between head checks |
+| `BLOCK_DUMPER_RPC_TIMEOUT` | `float` | `30.0` | Deadline for a raw RPC chain read (US-3.3) |
 | `BLOCK_DUMPER_LOOKBACK_ENABLED` | `bool` | `True` | Global kill-switch for `backfilling_lookback` |
 | `BLOCK_DUMPER_MAX_ATTEMPTS` | `int` | `3` | Maximum attempts before giving up |
 | `BLOCK_TASK_RETRY_BACKOFF` | `int` | `1` | Exponential backoff base, in minutes |

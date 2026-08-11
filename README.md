@@ -312,6 +312,7 @@ CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'test', 'devnet', 'archive'
 BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
+BLOCK_DUMPER_RPC_TIMEOUT = 30.0  # seconds before a stalled chain read is abandoned
 BLOCK_DUMPER_LOOKBACK_ENABLED = True  # honor per-task backfilling_lookback (default True)
 BLOCK_TASK_RETRY_BACKOFF = 2  # minutes for retry backoff base
 BLOCK_DUMPER_MAX_ATTEMPTS = 3  # maximum retry attempts
@@ -336,9 +337,11 @@ BITTENSOR_NETWORK = 'finney'
 - **Default:** `None`
 - **Valid Range:** `None`, `'current'`, or any positive integer
 - **Description:** Determines the starting block for processing when the scheduler first runs
-  - `None` → Resume from the last processed block stored in database
-  - `'current'` → Start from the current blockchain block (skips historical blocks)
-  - Integer → Start from a specific block number (e.g., `1000000`)
+  - `None` → Resume from the last block stored in the database for the tasks reading the same chain head, or that head's current block if there is none
+  - `'current'` → Start from the current block of the chain head each task reads (the finalized head for `finalized=True` tasks); skips historical blocks
+  - Integer → Start from a specific block number (e.g., `1000000`), for every task
+
+  Each chain head resolves its own starting point, so a `finalized=True` task never inherits the latest head's position — which would make it skip the blocks that were already produced but not yet finalized at start-up.
 
 ```python
 BLOCK_DUMPER_START_FROM_BLOCK = 'current'
@@ -362,6 +365,19 @@ BLOCK_DUMPER_POLL_INTERVAL = 5
 > - Lower values (1-2s): Near real-time processing, higher CPU/network usage
 > - Higher values (10-60s): Reduced load but delayed processing
 > - Very low values (<1s): May cause rate limiting
+
+---
+
+### `BLOCK_DUMPER_RPC_TIMEOUT`
+- **Type:** `float`
+- **Default:** `30.0`
+- **Description:** Seconds a raw RPC chain read (used for the finalized head) may take before it is abandoned and its connection dropped, so the next poll reconnects. The scheduler reads every chain head from a single thread, so without this bound a node that accepts a request and never answers would stall the other heads too.
+
+```python
+BLOCK_DUMPER_RPC_TIMEOUT = 30.0
+```
+
+> Set it above your node's slowest healthy response time; a value below that turns normal slowness into repeated reconnects.
 
 ---
 

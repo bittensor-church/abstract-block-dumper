@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
@@ -339,12 +340,16 @@ def test_bittensor_client_uses_archive_for_old_blocks(
     assert result is mock_archive_subtensor
 
 
-def _mocked_rpc_substrate(rpc_results: list | Exception) -> MagicMock:
-    """A stand-in for ``bt.RpcSubstrate`` whose raw RPC calls return ``rpc_results`` in order."""
+def _mocked_rpc_substrate(
+    finalized_heads: list | Exception,
+    block_numbers: list | None = None,
+) -> MagicMock:
+    """A stand-in for ``bt.RpcSubstrate`` whose raw chain reads return the given results in order."""
     substrate = MagicMock()
     substrate.connect = AsyncMock()
     substrate.close = AsyncMock()
-    substrate.raw.rpc_request = AsyncMock(side_effect=rpc_results)
+    substrate.raw.get_chain_finalised_head = AsyncMock(side_effect=finalized_heads)
+    substrate.raw.get_block_number = AsyncMock(side_effect=block_numbers or [])
     return substrate
 
 
@@ -365,7 +370,7 @@ def test_bittensor_client_reads_the_latest_block_from_the_chain_head() -> None:
 
 
 def test_bittensor_client_reads_the_finalized_block_over_rpc() -> None:
-    substrate = _mocked_rpc_substrate(["0xfinalized", {"number": "0x3e6"}, "0xfinalized", {"number": "0x3e7"}])
+    substrate = _mocked_rpc_substrate(["0xfinalized", "0xfinalized"], [998, 999])
     client = _client_with_endpoint()
 
     with patch.object(bt, "RpcSubstrate", return_value=substrate) as rpc_substrate_cls:
@@ -376,17 +381,16 @@ def test_bittensor_client_reads_the_finalized_block_over_rpc() -> None:
     # One connection, reused across reads.
     rpc_substrate_cls.assert_called_once_with("ws://localhost:9944")
     substrate.connect.assert_awaited_once()
-    assert substrate.raw.rpc_request.await_args_list == [
-        call("chain_getFinalizedHead", []),
-        call("chain_getHeader", ["0xfinalized"]),
-        call("chain_getFinalizedHead", []),
-        call("chain_getHeader", ["0xfinalized"]),
+    assert substrate.raw.get_chain_finalised_head.await_count == 2
+    assert substrate.raw.get_block_number.await_args_list == [
+        call(block_hash="0xfinalized"),
+        call(block_hash="0xfinalized"),
     ]
 
 
 def test_bittensor_client_reconnects_after_a_failed_finalized_read() -> None:
     failing = _mocked_rpc_substrate(ConnectionError("socket closed"))
-    healthy = _mocked_rpc_substrate(["0xfinalized", {"number": "0x3e6"}])
+    healthy = _mocked_rpc_substrate(["0xfinalized"], [998])
     client = _client_with_endpoint()
 
     with patch.object(bt, "RpcSubstrate", side_effect=[failing, healthy]):
@@ -398,4 +402,28 @@ def test_bittensor_client_reconnects_after_a_failed_finalized_read() -> None:
         client.close()
 
     failing.close.assert_awaited_once()
+    healthy.connect.assert_awaited_once()
+
+
+def test_bittensor_client_times_out_a_finalized_read_that_never_answers() -> None:
+    """A socket that accepts the request and goes quiet must not park the caller forever."""
+
+    async def never_answers(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    stalled = _mocked_rpc_substrate([])
+    stalled.raw.get_chain_finalised_head = AsyncMock(side_effect=never_answers)
+    healthy = _mocked_rpc_substrate(["0xfinalized"], [998])
+    client = _client_with_endpoint()
+    client.rpc_timeout = 0.05
+
+    with patch.object(bt, "RpcSubstrate", side_effect=[stalled, healthy]):
+        with pytest.raises(TimeoutError):
+            client.get_block(finalized=True)
+
+        # The stalled connection is dropped, so the next read is served by a fresh one.
+        assert client.get_block(finalized=True) == 998
+        client.close()
+
+    stalled.close.assert_awaited_once()
     healthy.connect.assert_awaited_once()

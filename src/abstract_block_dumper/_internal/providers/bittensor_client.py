@@ -20,6 +20,11 @@ T = TypeVar("T")
 # Blocks older than this threshold from current head require archive network
 ARCHIVE_BLOCK_THRESHOLD = 300
 
+# A raw RPC call that has not answered by now is treated as a stalled connection. The
+# scheduler drives these reads from its single thread, so an unbounded wait on one
+# chain head would park every other head with it.
+DEFAULT_RPC_TIMEOUT_SECONDS = 30.0
+
 
 class BittensorConnectionClient:
     """
@@ -30,8 +35,9 @@ class BittensorConnectionClient:
             block = client.subtensor.block
     """
 
-    def __init__(self, network: str) -> None:
+    def __init__(self, network: str, rpc_timeout: float = DEFAULT_RPC_TIMEOUT_SECONDS) -> None:
         self.network = network
+        self.rpc_timeout = rpc_timeout
         self._subtensor: bt.Subtensor | None = None
         self._archive_subtensor: bt.Subtensor | None = None
         self._current_block_cache: int | None = None
@@ -88,7 +94,8 @@ class BittensorConnectionClient:
         try:
             return self._run_rpc(self._read_finalized_block_number())
         except Exception:
-            # The connection may be the reason this failed; drop it so the next
+            # The connection may be the reason this failed - including a timeout, where
+            # the socket accepted the request and never answered. Drop it so the next
             # read reconnects instead of retrying on a dead socket.
             self._close_rpc_substrate()
             raise
@@ -113,11 +120,13 @@ class BittensorConnectionClient:
         Run an async bittensor call on this client's own event loop.
 
         The loop is kept between calls so the RPC connection survives; the
-        scheduler that drives this is synchronous and single-threaded.
+        scheduler that drives this is synchronous and single-threaded. Every call is
+        bounded by ``rpc_timeout``, so a websocket that goes quiet raises
+        ``TimeoutError`` instead of parking the caller forever.
         """
         if self._rpc_loop is None or self._rpc_loop.is_closed():
             self._rpc_loop = asyncio.new_event_loop()
-        return self._rpc_loop.run_until_complete(coro)
+        return self._rpc_loop.run_until_complete(asyncio.wait_for(coro, self.rpc_timeout))
 
     def _close_rpc_substrate(self) -> None:
         """Close the raw RPC connection, if one is open."""

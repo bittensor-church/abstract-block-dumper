@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from datetime import timedelta
 from typing import Any
 
@@ -179,8 +179,18 @@ def task_create_or_get_pending(
     return task, created
 
 
-def get_the_latest_executed_block_number() -> int | None:
-    result = abd_models.TaskAttempt.objects.aggregate(max_block=Max("block_number"))
+def get_the_latest_executed_block_number(executable_paths: Collection[str] | None = None) -> int | None:
+    """
+    Get the highest recorded block number, optionally restricted to specific tasks.
+
+    Scoping matters when tasks follow different chain heads: the latest head always runs
+    ahead of the finalized one, so an unscoped maximum would hand finalized tasks a cursor
+    past blocks they have not processed yet.
+    """
+    attempts = abd_models.TaskAttempt.objects.all()
+    if executable_paths is not None:
+        attempts = attempts.filter(executable_path__in=executable_paths)
+    result = attempts.aggregate(max_block=Max("block_number"))
     return result["max_block"]
 
 
