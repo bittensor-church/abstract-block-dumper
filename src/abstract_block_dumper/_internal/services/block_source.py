@@ -15,7 +15,7 @@ class BlockSource:
     finalized: bool
 
     def get_block(self, bittensor_client: BittensorConnectionClient) -> int:
-        """Return the next block snapshot for this source."""
+        """Return the current head block number for this source."""
         return bittensor_client.get_block(finalized=self.finalized)
 
 

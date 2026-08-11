@@ -1,5 +1,5 @@
 from datetime import timedelta
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 import bittensor as bt
 import pytest
@@ -339,31 +339,63 @@ def test_bittensor_client_uses_archive_for_old_blocks(
     assert result is mock_archive_subtensor
 
 
-def test_bittensor_client_reads_each_block_source_from_one_subscription() -> None:
+def _mocked_rpc_substrate(rpc_results: list | Exception) -> MagicMock:
+    """A stand-in for ``bt.RpcSubstrate`` whose raw RPC calls return ``rpc_results`` in order."""
+    substrate = MagicMock()
+    substrate.connect = AsyncMock()
+    substrate.close = AsyncMock()
+    substrate.raw.rpc_request = AsyncMock(side_effect=rpc_results)
+    return substrate
+
+
+def _client_with_endpoint() -> BittensorConnectionClient:
+    client = BittensorConnectionClient(network="test")
+    client._subtensor = MagicMock(endpoint="ws://localhost:9944")
+    return client
+
+
+def test_bittensor_client_reads_the_latest_block_from_the_chain_head() -> None:
     subtensor = MagicMock()
-    streams = {
-        False: iter(
-            [
-                bt.BlockHeader(number=1000, parent_hash=None, raw={}),
-                bt.BlockHeader(number=1001, parent_hash=None, raw={}),
-            ]
-        ),
-        True: iter(
-            [
-                bt.BlockHeader(number=998, parent_hash=None, raw={}),
-                bt.BlockHeader(number=999, parent_hash=None, raw={}),
-            ]
-        ),
-    }
-    subtensor.blocks.side_effect = lambda *, finalized: streams[finalized]
+    type(subtensor).block = PropertyMock(side_effect=[1000, 1001])
     client = BittensorConnectionClient(network="test")
     client._subtensor = subtensor
 
     assert client.get_block() == 1000
-    assert client.get_block(finalized=True) == 998
-    assert client.get_block() == 1001
-    assert client.get_block(finalized=True) == 999
-    assert subtensor.blocks.call_args_list == [
-        call(finalized=False),
-        call(finalized=True),
+    assert client.get_block(finalized=False) == 1001
+
+
+def test_bittensor_client_reads_the_finalized_block_over_rpc() -> None:
+    substrate = _mocked_rpc_substrate(["0xfinalized", {"number": "0x3e6"}, "0xfinalized", {"number": "0x3e7"}])
+    client = _client_with_endpoint()
+
+    with patch.object(bt, "RpcSubstrate", return_value=substrate) as rpc_substrate_cls:
+        assert client.get_block(finalized=True) == 998
+        assert client.get_block(finalized=True) == 999
+        client.close()
+
+    # One connection, reused across reads.
+    rpc_substrate_cls.assert_called_once_with("ws://localhost:9944")
+    substrate.connect.assert_awaited_once()
+    assert substrate.raw.rpc_request.await_args_list == [
+        call("chain_getFinalizedHead", []),
+        call("chain_getHeader", ["0xfinalized"]),
+        call("chain_getFinalizedHead", []),
+        call("chain_getHeader", ["0xfinalized"]),
     ]
+
+
+def test_bittensor_client_reconnects_after_a_failed_finalized_read() -> None:
+    failing = _mocked_rpc_substrate(ConnectionError("socket closed"))
+    healthy = _mocked_rpc_substrate(["0xfinalized", {"number": "0x3e6"}])
+    client = _client_with_endpoint()
+
+    with patch.object(bt, "RpcSubstrate", side_effect=[failing, healthy]):
+        with pytest.raises(ConnectionError):
+            client.get_block(finalized=True)
+
+        # The dead connection is dropped, so the next read opens a fresh one.
+        assert client.get_block(finalized=True) == 998
+        client.close()
+
+    failing.close.assert_awaited_once()
+    healthy.connect.assert_awaited_once()

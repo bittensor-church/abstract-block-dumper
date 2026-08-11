@@ -34,7 +34,7 @@ Register functions -> detect new blocks -> evaluate conditions -> send to Celery
 
 2. Detect Blocks
 - Scheduler is running by management command `block_tasks_v1`
-- Scheduler subscribes to latest blocks and, when requested by a task, finalized blocks
+- Scheduler polls the latest chain head and, when requested by a task, the finalized head
 
 3. Plan Tasks
 - For each block, lambda conditions are evaluated against registered functions
@@ -118,7 +118,7 @@ $ python manage.py block_tasks_v1
 
 This command will:
 - Automatically discover and register all decorated functions
-- Subscribe to the blockchain's latest and requested finalized block streams
+- Start polling the blockchain for new blocks
 - Schedule tasks based on your lambda conditions
 
 ### 4. Start Celery Workers
@@ -189,7 +189,7 @@ Pass `backfilling_lookback=N` to `@block_task` to have the **live** scheduler ke
 trailing `N`-block window filled for that task. On every new head block `H`, in addition
 to processing `H`, the scheduler (re)submits any block in `[H-N, H-1]` that this task has
 **not** already completed and that is **not** currently in flight, still respecting the
-task's `condition`. This self-heals gaps caused by scheduler downtime or disconnections,
+task's `condition`. This self-heals gaps caused by scheduler downtime or skipped polls,
 bounded to at most `N` blocks of catch-up per head.
 
 ```python
@@ -207,15 +207,15 @@ For tasks declared with `finalized=True`, the lookback window is anchored to the
 head instead of the latest chain head.
 
 Set `backfill_queue` on a task to route its lookback submissions away from its normal
-queue. The same queue is also used by the historical backfill command. Current-head and
-finalized-head live submissions continue to use the queue from the task's
-`celery_kwargs`, or Celery's default queue when none is declared. If `backfill_queue` is
-omitted, backfill and live submissions use the same routing. Leading and trailing
-whitespace is stripped from a configured `backfill_queue`; values that are empty after 
-stripping, or are not strings, raise `ValueError` when the task is decorated. Automatic 
-retries preserve the queue used for the original submission — it is recorded on the 
-`TaskAttempt` row, so retries re-dispatched by a worker and retries recovered from the 
-database after a restart both stay on it.
+queue. The same queue is also used by the historical backfill command. Live submissions at
+either head continue to use the queue from the task's `celery_kwargs`, or Celery's
+default queue when none is declared. If `backfill_queue` is omitted, backfill and live
+submissions use the same routing. Leading and trailing whitespace is stripped from a
+configured `backfill_queue`; values that are empty after stripping, or are not strings,
+raise `ValueError` when the task is decorated. Automatic retries preserve the queue used
+for the original submission — it is recorded on the `TaskAttempt` row, so retries
+re-dispatched by a worker and retries recovered from the database after a restart both
+stay on it.
 
 ### 2. Historical backfill command (`backfill_blocks_v1`)
 
@@ -311,7 +311,7 @@ CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 # Abstract Block Dumper specific settings
 BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'test', 'devnet', 'archive'
 BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
-BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between block-stream processing passes
+BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
 BLOCK_DUMPER_LOOKBACK_ENABLED = True  # honor per-task backfilling_lookback (default True)
 BLOCK_TASK_RETRY_BACKOFF = 2  # minutes for retry backoff base
 BLOCK_DUMPER_MAX_ATTEMPTS = 3  # maximum retry attempts
@@ -352,16 +352,16 @@ BLOCK_DUMPER_START_FROM_BLOCK = 'current'
 - **Type:** `int`
 - **Default:** `5`
 - **Valid Range:** `1` to `3600` (seconds)
-- **Description:** Seconds to wait between processing passes over the configured block streams
+- **Description:** Seconds to wait between checking for new blocks
 
 ```python
 BLOCK_DUMPER_POLL_INTERVAL = 5
 ```
 
 > **Performance Impact:**
-> - Lower values (1-2s): Less added processing latency and faster draining of buffered blocks
-> - Higher values (10-60s): Reduced scheduler activity but increased latency and possible backlog
-> - The node subscriptions remain open while the scheduler sleeps
+> - Lower values (1-2s): Near real-time processing, higher CPU/network usage
+> - Higher values (10-60s): Reduced load but delayed processing
+> - Very low values (<1s): May cause rate limiting
 
 ---
 
