@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+from abstract_block_dumper._internal.services.block_source import LATEST_BLOCK_SOURCE
 from abstract_block_dumper._internal.services.scheduler import task_scheduler_factory
 from abstract_block_dumper.models import TaskAttempt
 
@@ -14,7 +15,7 @@ def test_complete_e2e_workflow(mock_get_bittensor_client, setup_test_tasks) -> N
     mock_subtensor.block = block_number
 
     scheduler = task_scheduler_factory()
-    scheduler.last_processed_block = block_number - 1
+    scheduler.last_processed_blocks = {LATEST_BLOCK_SOURCE: block_number - 1}
     scheduler.block_processor.process_block(block_number)
 
     task_attempts = TaskAttempt.objects.filter(block_number=block_number)
@@ -37,7 +38,7 @@ def test_block_processing_flow(mock_get_bittensor_client, setup_test_tasks):
 
     # Create scheduler and process block
     scheduler = task_scheduler_factory()
-    scheduler.last_processed_block = 99
+    scheduler.last_processed_blocks = {LATEST_BLOCK_SOURCE: 99}
     scheduler.block_processor.process_block(current_block)
 
     # Verify tasks were created for block current_block

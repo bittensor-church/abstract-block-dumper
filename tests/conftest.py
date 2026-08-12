@@ -26,7 +26,7 @@ class MockedBlockProcessor:
         self.processed_registry_items: list[tuple[RegistryItem, int]] = []
         self.recover_failed_retries_calls: list[tuple[int, int | None]] = []
 
-    def process_block(self, block_number: int) -> None:
+    def process_block(self, block_number: int, *, registry_items=None) -> None:
         self.processed_blocks.append(block_number)
 
     def process_registry_item(self, registry_item: RegistryItem, block_number: int) -> None:

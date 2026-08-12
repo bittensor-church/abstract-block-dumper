@@ -34,7 +34,7 @@ Register functions -> detect new blocks -> evaluate conditions -> send to Celery
 
 2. Detect Blocks
 - Scheduler is running by management command `block_tasks_v1`
-- Scheduler polls blockchain, finds new blocks, and batches them
+- Scheduler polls the latest chain head and, when requested by a task, the finalized head
 
 3. Plan Tasks
 - For each block, lambda conditions are evaluated against registered functions
@@ -161,6 +161,11 @@ def process_every_block(block_number: int):
 def process_every_10_blocks(block_number: int):
     print(f"Processing every 10 blocks: {block_number}")
 
+# Process blocks only after finalization
+@block_task(finalized=True)
+def process_finalized_block(block_number: int):
+    print(f"Processing finalized block: {block_number}")
+
 # Process with multiple netuids
 @block_task(
     condition=lambda bn, netuid: bn % 100 == 0,
@@ -198,10 +203,12 @@ Only tasks that declare `backfilling_lookback` are backfilled this way. Already-
 and in-flight (`PENDING`/`RUNNING`) blocks are skipped; failed blocks are retried subject
 to the normal retry backoff. The whole mechanism can be disabled globally with
 `BLOCK_DUMPER_LOOKBACK_ENABLED = False` (see [Configuration Options Reference](#configuration-options-reference)).
+For tasks declared with `finalized=True`, the lookback window is anchored to the finalized
+head instead of the latest chain head.
 
 Set `backfill_queue` on a task to route its lookback submissions away from its normal
-queue. The same queue is also used by the historical backfill command. Current-head
-submissions continue to use the queue from the task's `celery_kwargs`, or Celery's
+queue. The same queue is also used by the historical backfill command. Live submissions at
+either head continue to use the queue from the task's `celery_kwargs`, or Celery's
 default queue when none is declared. If `backfill_queue` is omitted, backfill and live
 submissions use the same routing. Leading and trailing whitespace is stripped from a
 configured `backfill_queue`; values that are empty after stripping, or are not strings,
@@ -302,9 +309,10 @@ CELERY_BROKER_URL = 'redis://localhost:6379/0'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
 # Abstract Block Dumper specific settings
-BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'testnet', 'mainnet'
+BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'test', 'devnet', 'archive'
 BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
+BLOCK_DUMPER_RPC_TIMEOUT = 30.0  # seconds before a stalled chain read is abandoned
 BLOCK_DUMPER_LOOKBACK_ENABLED = True  # honor per-task backfilling_lookback (default True)
 BLOCK_TASK_RETRY_BACKOFF = 2  # minutes for retry backoff base
 BLOCK_DUMPER_MAX_ATTEMPTS = 3  # maximum retry attempts
@@ -329,9 +337,11 @@ BITTENSOR_NETWORK = 'finney'
 - **Default:** `None`
 - **Valid Range:** `None`, `'current'`, or any positive integer
 - **Description:** Determines the starting block for processing when the scheduler first runs
-  - `None` → Resume from the last processed block stored in database
-  - `'current'` → Start from the current blockchain block (skips historical blocks)
-  - Integer → Start from a specific block number (e.g., `1000000`)
+  - `None` → Resume from the last block stored in the database for the tasks reading the same chain head, or that head's current block if there is none
+  - `'current'` → Start from the current block of the chain head each task reads (the finalized head for `finalized=True` tasks); skips historical blocks
+  - Integer → Start from a specific block number (e.g., `1000000`), for every task
+
+  Each chain head resolves its own starting point, so a `finalized=True` task never inherits the latest head's position — which would make it skip the blocks that were already produced but not yet finalized at start-up.
 
 ```python
 BLOCK_DUMPER_START_FROM_BLOCK = 'current'
@@ -355,6 +365,19 @@ BLOCK_DUMPER_POLL_INTERVAL = 5
 > - Lower values (1-2s): Near real-time processing, higher CPU/network usage
 > - Higher values (10-60s): Reduced load but delayed processing
 > - Very low values (<1s): May cause rate limiting
+
+---
+
+### `BLOCK_DUMPER_RPC_TIMEOUT`
+- **Type:** `float`
+- **Default:** `30.0`
+- **Description:** Seconds a raw RPC chain read (used for the finalized head) may take before it is abandoned and its connection dropped, so the next poll reconnects. The scheduler reads every chain head from a single thread, so without this bound a node that accepts a request and never answers would stall the other heads too.
+
+```python
+BLOCK_DUMPER_RPC_TIMEOUT = 30.0
+```
+
+> Set it above your node's slowest healthy response time; a value below that turns normal slowness into repeated reconnects.
 
 ---
 

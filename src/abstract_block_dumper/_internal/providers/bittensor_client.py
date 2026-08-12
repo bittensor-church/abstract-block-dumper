@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import bittensor as bt
 import structlog
@@ -9,12 +10,20 @@ import abstract_block_dumper._internal.services.utils as abd_utils
 
 if TYPE_CHECKING:
     import types
+    from collections.abc import Coroutine
 
 logger = structlog.get_logger(__name__)
+
+T = TypeVar("T")
 
 
 # Blocks older than this threshold from current head require archive network
 ARCHIVE_BLOCK_THRESHOLD = 300
+
+# A raw RPC call that has not answered by now is treated as a stalled connection. The
+# scheduler drives these reads from its single thread, so an unbounded wait on one
+# chain head would park every other head with it.
+DEFAULT_RPC_TIMEOUT_SECONDS = 30.0
 
 
 class BittensorConnectionClient:
@@ -26,11 +35,14 @@ class BittensorConnectionClient:
             block = client.subtensor.block
     """
 
-    def __init__(self, network: str) -> None:
+    def __init__(self, network: str, rpc_timeout: float = DEFAULT_RPC_TIMEOUT_SECONDS) -> None:
         self.network = network
+        self.rpc_timeout = rpc_timeout
         self._subtensor: bt.Subtensor | None = None
         self._archive_subtensor: bt.Subtensor | None = None
         self._current_block_cache: int | None = None
+        self._rpc_substrate: bt.RpcSubstrate | None = None
+        self._rpc_loop: asyncio.AbstractEventLoop | None = None
 
     def __enter__(self) -> BittensorConnectionClient:
         """Context manager entry."""
@@ -47,6 +59,11 @@ class BittensorConnectionClient:
 
     def close(self) -> None:
         """Close all subtensor connections to prevent memory leaks."""
+        self._close_rpc_substrate()
+        if self._rpc_loop is not None:
+            self._rpc_loop.close()
+            self._rpc_loop = None
+
         if self._subtensor is not None:
             try:
                 self._subtensor.close()
@@ -63,6 +80,64 @@ class BittensorConnectionClient:
 
         self._current_block_cache = None
         logger.debug("Subtensor connections closed")
+
+    def get_block(self, *, finalized: bool = False) -> int:
+        """
+        Return the current block number of the selected chain head.
+
+        Each call reads the chain directly, so the caller always sees where the
+        chain is now rather than the next entry of a buffered stream.
+        """
+        if not finalized:
+            return self.subtensor.block
+
+        try:
+            return self._run_rpc(self._read_finalized_block_number())
+        except Exception:
+            # The connection may be the reason this failed - including a timeout, where
+            # the socket accepted the request and never answered. Drop it so the next
+            # read reconnects instead of retrying on a dead socket.
+            self._close_rpc_substrate()
+            raise
+
+    async def _read_finalized_block_number(self) -> int:
+        """Resolve the finalized head hash and read its block number."""
+        substrate = await self._connected_rpc_substrate()
+        block_hash = await substrate.raw.get_chain_finalised_head()
+        return await substrate.raw.get_block_number(block_hash=block_hash)
+
+    async def _connected_rpc_substrate(self) -> bt.RpcSubstrate:
+        """Get the raw RPC connection, opening it if needed."""
+        if self._rpc_substrate is None:
+            logger.info("Creating new RPC substrate connection", network=self.network)
+            substrate = bt.RpcSubstrate(self.subtensor.endpoint)
+            await substrate.connect()
+            self._rpc_substrate = substrate
+        return self._rpc_substrate
+
+    def _run_rpc(self, coro: Coroutine[Any, Any, T]) -> T:
+        """
+        Run an async bittensor call on this client's own event loop.
+
+        The loop is kept between calls so the RPC connection survives; the
+        scheduler that drives this is synchronous and single-threaded. Every call is
+        bounded by ``rpc_timeout``, so a websocket that goes quiet raises
+        ``TimeoutError`` instead of parking the caller forever.
+        """
+        if self._rpc_loop is None or self._rpc_loop.is_closed():
+            self._rpc_loop = asyncio.new_event_loop()
+        return self._rpc_loop.run_until_complete(asyncio.wait_for(coro, self.rpc_timeout))
+
+    def _close_rpc_substrate(self) -> None:
+        """Close the raw RPC connection, if one is open."""
+        if self._rpc_substrate is None:
+            return
+
+        try:
+            self._run_rpc(self._rpc_substrate.close())
+        except Exception:
+            logger.warning("Error closing RPC substrate connection", exc_info=True)
+        self._rpc_substrate = None
 
     def get_for_block(self, block_number: int) -> bt.Subtensor:
         """Get the appropriate subtensor client for the given block number."""

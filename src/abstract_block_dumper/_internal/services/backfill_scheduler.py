@@ -16,6 +16,7 @@ import structlog
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
 import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.services.block_processor import BaseBlockProcessor, block_processor_factory
+from abstract_block_dumper._internal.services.block_source import LATEST_BLOCK_SOURCE
 from abstract_block_dumper._internal.services.metrics import (
     BlockProcessingTimer,
     increment_blocks_processed,
@@ -237,19 +238,23 @@ class BackfillScheduler:
                     break
 
                 try:
-                    with BlockProcessingTimer(mode="backfill"):
+                    # Backfill measures itself against the latest head: `_current_head_cache`
+                    # is read from `subtensor.block`.
+                    source = LATEST_BLOCK_SOURCE.name
+
+                    with BlockProcessingTimer(mode="backfill", source=source):
                         self._process_block(block_number, executed_blocks_cache)
 
                     processed_count += 1
 
                     # Update metrics
-                    set_current_block("backfill", block_number)
+                    set_current_block("backfill", block_number, source=source)
                     set_backfill_progress(self.from_block, self.to_block, block_number)
-                    increment_blocks_processed("backfill")
+                    increment_blocks_processed("backfill", source=source)
 
                     # Track block lag (distance from chain head)
                     if self._current_head_cache:
-                        set_block_lag("backfill", self._current_head_cache - block_number)
+                        set_block_lag("backfill", self._current_head_cache - block_number, source=source)
 
                     # Log each block being processed
                     progress_pct = (processed_count / total_blocks) * 100

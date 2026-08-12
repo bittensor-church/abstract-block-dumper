@@ -5,8 +5,13 @@ import structlog
 from django.conf import settings
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
-from abstract_block_dumper._internal.providers.bittensor_client import BittensorConnectionClient
+from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
+from abstract_block_dumper._internal.providers.bittensor_client import (
+    DEFAULT_RPC_TIMEOUT_SECONDS,
+    BittensorConnectionClient,
+)
 from abstract_block_dumper._internal.services.block_processor import BaseBlockProcessor, block_processor_factory
+from abstract_block_dumper._internal.services.block_source import BlockSource
 from abstract_block_dumper._internal.services.metrics import (
     BlockProcessingTimer,
     increment_blocks_processed,
@@ -22,8 +27,8 @@ logger = structlog.get_logger(__name__)
 class BlockStateResolver(Protocol):
     """Protocol defining the interface for block state resolvers."""
 
-    def get_starting_block(self) -> int:
-        """Determine which block to start processing from."""
+    def get_starting_block(self, block_source: BlockSource, registry_items: list[RegistryItem]) -> int:
+        """Determine which block to start processing from for one chain head."""
         ...
 
 
@@ -33,15 +38,20 @@ class DefaultBlockStateResolver:
     def __init__(self, bittensor_client: BittensorConnectionClient) -> None:
         self.bittensor_client = bittensor_client
 
-    def get_starting_block(self) -> int:
+    def get_starting_block(self, block_source: BlockSource, registry_items: list[RegistryItem]) -> int:
         start_setting = getattr(settings, "BLOCK_DUMPER_START_FROM_BLOCK", None)
         if start_setting == "current":
-            return self.bittensor_client.subtensor.block
+            return block_source.get_block(self.bittensor_client)
         if isinstance(start_setting, int):
             return start_setting
 
-        # Default: resume from DB or current
-        return abd_dal.get_the_latest_executed_block_number() or self.bittensor_client.subtensor.block
+        # Default: resume from this head's own attempts, or from this head's current block.
+        # Both reads stay inside one chain head: the latest head runs ahead of the finalized
+        # one, so a shared starting point would put finalized tasks past blocks that are
+        # already produced but not yet finalized, and they would never be processed.
+        executable_paths = [registry_item.executable_path for registry_item in registry_items]
+        latest_executed = abd_dal.get_the_latest_executed_block_number(executable_paths=executable_paths)
+        return latest_executed or block_source.get_block(self.bittensor_client)
 
 
 class TaskScheduler:
@@ -57,7 +67,9 @@ class TaskScheduler:
         self.block_processor = block_processor
         self.poll_interval = poll_interval
         self.bittensor_client = bittensor_client
-        self.last_processed_block = state_resolver.get_starting_block()
+        self.state_resolver = state_resolver
+        self.last_processed_blocks: dict[BlockSource, int] = {}
+        self.observed_blocks: dict[BlockSource, int] = {}
         self.is_running = False
         self.window_backfiller = window_backfiller
         self.lookback_enabled = lookback_enabled
@@ -65,31 +77,28 @@ class TaskScheduler:
     def start(self) -> None:
         self.is_running = True
 
-        registered_tasks_count = len(self.block_processor.registry.get_functions())
+        registry_functions = self.block_processor.registry.get_functions()
+        registered_tasks_count = len(registry_functions)
+        task_groups = self._group_by_block_source(registry_functions)
+        self.last_processed_blocks = {}
+        for block_source, registry_items in task_groups.items():
+            self._ensure_starting_block(block_source, registry_items)
         set_registered_tasks(registered_tasks_count)
 
         logger.info(
             "TaskScheduler started",
-            last_processed_block=self.last_processed_block,
+            last_processed_blocks={
+                block_source.name: block_number for block_source, block_number in self.last_processed_blocks.items()
+            },
             registry_functions=registered_tasks_count,
         )
 
         while self.is_running:
             try:
-                current_block = self.bittensor_client.subtensor.block
+                for block_source, registry_items in task_groups.items():
+                    self._poll_block_source(block_source, registry_items)
 
-                # Only process the current head block, skip if already processed
-                if current_block != self.last_processed_block:
-                    with BlockProcessingTimer(mode="realtime"):
-                        self.block_processor.process_block(current_block)
-
-                    self._fill_lookback(current_block)
-
-                    set_current_block("realtime", current_block)
-                    increment_blocks_processed("realtime")
-                    set_block_lag("realtime", 0)  # Head-only mode has no lag
-                    self.last_processed_block = current_block
-
+                self._report_block_lag()
                 time.sleep(self.poll_interval)
 
             except KeyboardInterrupt:
@@ -100,7 +109,85 @@ class TaskScheduler:
                 logger.exception("Error in TaskScheduler loop")
                 time.sleep(self.poll_interval)
 
-    def _fill_lookback(self, head: int) -> None:
+    def _ensure_starting_block(self, block_source: BlockSource, registry_items: list[RegistryItem]) -> bool:
+        """
+        Resolve this head's starting block once, and report whether it is known.
+
+        Resolving can read the chain - `BLOCK_DUMPER_START_FROM_BLOCK='current'`, or a head
+        with no stored attempts - so it fails the same way a poll does. A head that cannot be
+        resolved stays pending and is retried on the next poll instead of aborting startup for
+        the heads that are healthy.
+        """
+        if block_source in self.last_processed_blocks:
+            return True
+
+        try:
+            self.last_processed_blocks[block_source] = self.state_resolver.get_starting_block(
+                block_source, registry_items
+            )
+        except Exception:
+            logger.exception("Error resolving starting block", block_source=block_source.name)
+            return False
+        return True
+
+    def _poll_block_source(self, block_source: BlockSource, registry_items: list[RegistryItem]) -> None:
+        """
+        Advance one chain head by a single poll.
+
+        Failures stay inside the head that caused them: a head whose read or processing
+        raises loses only its own turn, so an unhealthy one (eg. a stalled finalized RPC)
+        cannot starve the heads that are still healthy.
+        """
+        if not self._ensure_starting_block(block_source, registry_items):
+            return
+
+        try:
+            current_block = block_source.get_block(self.bittensor_client)
+            self.observed_blocks[block_source] = current_block
+
+            if current_block <= self.last_processed_blocks[block_source]:
+                return
+
+            with BlockProcessingTimer(mode="realtime", source=block_source.name):
+                self.block_processor.process_block(current_block, registry_items=registry_items)
+
+            self._fill_lookback(current_block, registry_items=registry_items)
+
+            set_current_block("realtime", current_block, source=block_source.name)
+            increment_blocks_processed("realtime", source=block_source.name)
+            self.last_processed_blocks[block_source] = current_block
+        except Exception:
+            logger.exception("Error polling block source", block_source=block_source.name)
+
+    def _report_block_lag(self) -> None:
+        """
+        Publish how far behind the chain each head has fallen.
+
+        Every head reads the same chain, so the highest block seen this iteration is the
+        best available estimate of the tip. A head that stops advancing - because
+        finality lags, its reads keep failing, or its blocks fail to process - keeps its
+        last processed block and shows up as growing lag.
+        """
+        if not self.observed_blocks:
+            return
+
+        chain_head = max(self.observed_blocks.values())
+        for block_source, last_processed_block in self.last_processed_blocks.items():
+            set_block_lag("realtime", max(0, chain_head - last_processed_block), source=block_source.name)
+
+    @staticmethod
+    def _group_by_block_source(registry_items: list[RegistryItem]) -> dict[BlockSource, list[RegistryItem]]:
+        task_groups: dict[BlockSource, list[RegistryItem]] = {}
+        for registry_item in registry_items:
+            task_groups.setdefault(registry_item.block_source, []).append(registry_item)
+        return task_groups
+
+    def _fill_lookback(
+        self,
+        head: int,
+        *,
+        registry_items: list[RegistryItem] | None = None,
+    ) -> None:
         """
         Backfill the trailing lookback window for tasks that declare one.
 
@@ -110,7 +197,8 @@ class TaskScheduler:
         if not self.lookback_enabled:
             return
 
-        for registry_item in self.block_processor.registry.get_functions():
+        items = registry_items if registry_items is not None else self.block_processor.registry.get_functions()
+        for registry_item in items:
             if not registry_item.requires_backfilling():
                 continue
 
@@ -157,7 +245,10 @@ def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
     """
     if network is None:
         network = getattr(settings, "BITTENSOR_NETWORK", "finney")
-    bittensor_client = BittensorConnectionClient(network=network)
+    bittensor_client = BittensorConnectionClient(
+        network=network,
+        rpc_timeout=getattr(settings, "BLOCK_DUMPER_RPC_TIMEOUT", DEFAULT_RPC_TIMEOUT_SECONDS),
+    )
     state_resolver = DefaultBlockStateResolver(bittensor_client=bittensor_client)
     block_processor = block_processor_factory()
     return TaskScheduler(

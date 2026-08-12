@@ -11,6 +11,7 @@ import abstract_block_dumper._internal.dal.django_dal as abd_dal
 import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem, task_registry
 from abstract_block_dumper._internal.exceptions import CeleryTaskLockedError
+from abstract_block_dumper._internal.services.block_source import FINALIZED_BLOCK_SOURCE, LATEST_BLOCK_SOURCE
 from abstract_block_dumper._internal.services.metrics import (
     observe_task_execution_time,
     record_task_execution,
@@ -188,6 +189,7 @@ def block_task(
     *,
     condition: Callable[..., bool] | None = None,
     args: list[dict[str, Any]] | None = None,
+    finalized: bool = False,
     backfilling_lookback: int | None = None,
     backfill_queue: str | None = None,
     celery_kwargs: dict[str, Any] | None = None,
@@ -205,8 +207,10 @@ def block_task(
                    block_number and any additional args as parameters and return a boolean.
                    Defaults to always True (run on every block).
         args: List of argument dictionaries for multi-execution
+        finalized: If True, run this task as blocks are finalized instead of reading the
+                   latest chain head. Defaults to False.
         backfilling_lookback: If set to N, the live scheduler keeps the trailing N-block
-                   window filled for this task: on every new head block H it also
+                   window filled for this task: on every new selected head block H it also
                    (re)submits any block in [H-N, H-1] that has not already completed and
                    is not currently in flight, still respecting ``condition``. Defaults to
                    None (no lookback backfilling). Globally gated by the
@@ -278,6 +282,7 @@ def block_task(
                 condition=effective_condition,
                 function=cast("Task", celery_task),
                 args=args,
+                block_source=FINALIZED_BLOCK_SOURCE if finalized else LATEST_BLOCK_SOURCE,
                 backfilling_lookback=backfilling_lookback,
                 backfill_queue=effective_backfill_queue,
                 celery_kwargs=celery_kwargs or {},
