@@ -80,10 +80,9 @@ class TaskScheduler:
         registry_functions = self.block_processor.registry.get_functions()
         registered_tasks_count = len(registry_functions)
         task_groups = self._group_by_block_source(registry_functions)
-        self.last_processed_blocks = {
-            block_source: self.state_resolver.get_starting_block(block_source, registry_items)
-            for block_source, registry_items in task_groups.items()
-        }
+        self.last_processed_blocks = {}
+        for block_source, registry_items in task_groups.items():
+            self._ensure_starting_block(block_source, registry_items)
         set_registered_tasks(registered_tasks_count)
 
         logger.info(
@@ -110,6 +109,27 @@ class TaskScheduler:
                 logger.exception("Error in TaskScheduler loop")
                 time.sleep(self.poll_interval)
 
+    def _ensure_starting_block(self, block_source: BlockSource, registry_items: list[RegistryItem]) -> bool:
+        """
+        Resolve this head's starting block once, and report whether it is known.
+
+        Resolving can read the chain - `BLOCK_DUMPER_START_FROM_BLOCK='current'`, or a head
+        with no stored attempts - so it fails the same way a poll does. A head that cannot be
+        resolved stays pending and is retried on the next poll instead of aborting startup for
+        the heads that are healthy.
+        """
+        if block_source in self.last_processed_blocks:
+            return True
+
+        try:
+            self.last_processed_blocks[block_source] = self.state_resolver.get_starting_block(
+                block_source, registry_items
+            )
+        except Exception:
+            logger.exception("Error resolving starting block", block_source=block_source.name)
+            return False
+        return True
+
     def _poll_block_source(self, block_source: BlockSource, registry_items: list[RegistryItem]) -> None:
         """
         Advance one chain head by a single poll.
@@ -118,6 +138,9 @@ class TaskScheduler:
         raises loses only its own turn, so an unhealthy one (eg. a stalled finalized RPC)
         cannot starve the heads that are still healthy.
         """
+        if not self._ensure_starting_block(block_source, registry_items):
+            return
+
         try:
             current_block = block_source.get_block(self.bittensor_client)
             self.observed_blocks[block_source] = current_block

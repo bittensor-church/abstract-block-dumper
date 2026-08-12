@@ -3,8 +3,10 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 import abstract_block_dumper._internal.services.utils as abd_utils
+from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
 from abstract_block_dumper._internal.providers.bittensor_client import BittensorConnectionClient
 from abstract_block_dumper._internal.services.block_processor import block_processor_factory
+from abstract_block_dumper._internal.services.block_source import BlockSource
 from abstract_block_dumper._internal.services.scheduler import TaskScheduler
 from abstract_block_dumper._internal.services.window_backfiller import WindowBackfiller
 from abstract_block_dumper.models import TaskAttempt
@@ -70,13 +72,18 @@ def _scheduler_for(bittensor_client: MagicMock, starting_block: int) -> TaskSche
     )
 
 
-def _run_one_poll(scheduler: TaskScheduler) -> None:
-    """Run the loop until the sleep at the end of the first iteration."""
+def _run_polls(scheduler: TaskScheduler, count: int = 1) -> None:
+    """Run the loop until the sleep at the end of the given iteration."""
     with patch(
         "abstract_block_dumper._internal.services.scheduler.time.sleep",
-        side_effect=KeyboardInterrupt,
+        side_effect=[None] * (count - 1) + [KeyboardInterrupt],
     ):
         scheduler.start()
+
+
+def _run_one_poll(scheduler: TaskScheduler) -> None:
+    """Run the loop until the sleep at the end of the first iteration."""
+    _run_polls(scheduler)
 
 
 @pytest.mark.django_db
@@ -101,6 +108,50 @@ def test_an_unreadable_chain_head_does_not_block_the_others() -> None:
         for attempt in TaskAttempt.objects.all()
     }
     assert attempts == {(abd_utils.get_executable_path(latest_head_task), 101, 101)}
+
+
+@pytest.mark.django_db
+def test_a_head_whose_starting_block_cannot_be_read_is_retried_on_a_later_poll() -> None:
+    """Resolving a starting block can read the chain, so it must fail like any other head read."""
+    # Registration order decides polling order, so the head with the unreadable cursor goes first.
+    block_task(finalized=True)(finalized_head_task)
+    block_task(latest_head_task)
+
+    bittensor_client = MagicMock(spec=BittensorConnectionClient)
+    bittensor_client.get_block.side_effect = lambda *, finalized: 100 if finalized else 101
+
+    resolved_heads: list[str] = []
+
+    def get_starting_block(block_source: BlockSource, registry_items: list[RegistryItem]) -> int:
+        resolved_heads.append(block_source.name)
+        # Fails while resolving at startup and on the first poll, then recovers.
+        if block_source.finalized and resolved_heads.count("finalized") <= 2:
+            raise ConnectionError("finalized RPC is down")
+        return 99
+
+    block_processor = block_processor_factory()
+    state_resolver = MagicMock()
+    state_resolver.get_starting_block.side_effect = get_starting_block
+    scheduler = TaskScheduler(
+        block_processor=block_processor,
+        bittensor_client=bittensor_client,
+        state_resolver=state_resolver,
+        poll_interval=0,
+        window_backfiller=WindowBackfiller(block_processor.executor),
+    )
+
+    _run_polls(scheduler, count=2)
+
+    attempts = {
+        (attempt.executable_path, attempt.block_number, attempt.execution_result)
+        for attempt in TaskAttempt.objects.all()
+    }
+    # The healthy head ran from the first poll; the other one joined once its cursor could be read.
+    assert attempts == {
+        (abd_utils.get_executable_path(latest_head_task), 101, 101),
+        (abd_utils.get_executable_path(finalized_head_task), 100, 100),
+    }
+    assert resolved_heads == ["finalized", "latest", "finalized", "finalized"]
 
 
 @pytest.mark.django_db

@@ -182,6 +182,9 @@ deployment does not surprise me.
   finalized one, so a `finalized=True` task that inherited the latest head's position
   would start past blocks that were produced but not yet finalized, and — because the loop
   only fires on a strictly higher head — would never process them.
+- Resolving a starting point can itself read the chain (`'current'`, or a head with no
+  recorded blocks). A head whose starting point cannot be read does not stop the scheduler:
+  it stays pending, is retried on each poll, and the other heads keep running meanwhile.
 - See [Known gaps](#known-gaps-and-non-goals) for what "start from an old block" does
   **not** do today.
 
@@ -197,7 +200,9 @@ match my node's rate limits.
 - A poll interval longer than the block time means intermediate blocks are not seen by the
   live loop; `backfilling_lookback` (§5) is the supported way to close that gap.
 - Each head is polled independently: a head whose read or processing fails loses only its
-  own turn and is retried on the next poll, so it cannot starve the other heads.
+  own turn and is retried on the next poll, so it cannot starve the other heads. This holds
+  from startup on — a head whose starting point cannot be resolved is skipped, not fatal
+  (US-3.2).
 - `BLOCK_DUMPER_RPC_TIMEOUT` bounds each raw RPC chain read (code default `30.0` seconds).
   On timeout the connection is dropped and the next poll reconnects, which keeps a node
   that stops answering from parking the single scheduler thread.
