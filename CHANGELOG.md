@@ -9,6 +9,12 @@ upcoming release can be found in [changelog.d](changelog.d).
 
 <!-- towncrier release notes start -->
 
+## [0.1.10](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.10) - 2026-08-14
+
+- Added optional custom backfill queue to separate live from backfill tasks.
+- Added flag to have tasks process the latest finalized block as opposed to the latest head.
+
+
 ## [0.1.9](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.9) - 2026-08-05
 
 ### Changed
