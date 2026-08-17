@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from django.test import override_settings
+from django.utils import timezone
 from freezegun import freeze_time
 
 from abstract_block_dumper.models import TaskAttempt
@@ -22,6 +23,7 @@ def assert_retry_delays(celery_task, original_func, expected_delays: list[timede
     executable_path = f"{original_func.__module__}.{original_func.__name__}"
 
     with freeze_time(frozen_now):
+        retry_started_at = timezone.now()
         for retry_number, expected_delay in enumerate(expected_delays, start=1):
             block_number = 1000 + retry_number
             task_attempt = TaskAttempt.objects.create(
@@ -36,7 +38,7 @@ def assert_retry_delays(celery_task, original_func, expected_delays: list[timede
 
             task_attempt.refresh_from_db()
             assert task_attempt.attempt_count == retry_number
-            assert task_attempt.next_retry_at == frozen_now + expected_delay
+            assert task_attempt.next_retry_at == retry_started_at + expected_delay
 
 
 @pytest.mark.django_db
