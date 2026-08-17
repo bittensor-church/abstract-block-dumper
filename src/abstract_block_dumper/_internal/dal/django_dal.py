@@ -11,6 +11,81 @@ from django.utils import timezone
 import abstract_block_dumper._internal.services.utils as abd_utils
 import abstract_block_dumper.models as abd_models
 
+DEFAULT_BLOCK_TASK_RETRY_BACKOFF = 1
+DEFAULT_BLOCK_TASK_FAST_RETRY_ATTEMPTS = 2
+DEFAULT_BLOCK_TASK_FAST_RETRY_DELAY_SECONDS = 5
+DEFAULT_BLOCK_TASK_RETRY_BACKOFF_START_SECONDS = 60
+DEFAULT_BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER = 2
+MAX_RETRY_DELAY_MINUTES = 1440  # 24 hours max delay
+
+STAGED_RETRY_SETTINGS = (
+    "BLOCK_TASK_FAST_RETRY_ATTEMPTS",
+    "BLOCK_TASK_FAST_RETRY_DELAY_SECONDS",
+    "BLOCK_TASK_RETRY_BACKOFF_START_SECONDS",
+    "BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER",
+)
+
+
+def _get_retry_delay_seconds(attempt_count: int) -> float:
+    max_delay_seconds = getattr(settings, "BLOCK_TASK_MAX_RETRY_DELAY_MINUTES", MAX_RETRY_DELAY_MINUTES) * 60
+
+    if not any(hasattr(settings, setting_name) for setting_name in STAGED_RETRY_SETTINGS):
+        legacy_backoff_minutes = getattr(
+            settings,
+            "BLOCK_TASK_RETRY_BACKOFF",
+            DEFAULT_BLOCK_TASK_RETRY_BACKOFF,
+        )
+        # B minutes with multiplier B reproduces the legacy B ** attempt_count
+        # minutes formula exactly.
+        fast_retry_attempts = 0
+        fast_retry_delay_seconds = 0
+        backoff_start_seconds = legacy_backoff_minutes * 60
+        backoff_multiplier = legacy_backoff_minutes
+    else:
+        fast_retry_attempts = getattr(
+            settings,
+            "BLOCK_TASK_FAST_RETRY_ATTEMPTS",
+            DEFAULT_BLOCK_TASK_FAST_RETRY_ATTEMPTS,
+        )
+        fast_retry_delay_seconds = getattr(
+            settings,
+            "BLOCK_TASK_FAST_RETRY_DELAY_SECONDS",
+            DEFAULT_BLOCK_TASK_FAST_RETRY_DELAY_SECONDS,
+        )
+        backoff_start_seconds = getattr(
+            settings,
+            "BLOCK_TASK_RETRY_BACKOFF_START_SECONDS",
+            DEFAULT_BLOCK_TASK_RETRY_BACKOFF_START_SECONDS,
+        )
+        backoff_multiplier = getattr(
+            settings,
+            "BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER",
+            DEFAULT_BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER,
+        )
+
+        if not isinstance(fast_retry_attempts, int) or isinstance(fast_retry_attempts, bool) or fast_retry_attempts < 0:
+            msg = "BLOCK_TASK_FAST_RETRY_ATTEMPTS must be a non-negative integer"
+            raise ValueError(msg)
+        if fast_retry_delay_seconds < 0:
+            msg = "BLOCK_TASK_FAST_RETRY_DELAY_SECONDS must be non-negative"
+            raise ValueError(msg)
+        if backoff_start_seconds < 0:
+            msg = "BLOCK_TASK_RETRY_BACKOFF_START_SECONDS must be non-negative"
+            raise ValueError(msg)
+        if backoff_multiplier < 1:
+            msg = "BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER must be at least 1"
+            raise ValueError(msg)
+
+    if attempt_count <= fast_retry_attempts:
+        retry_delay_seconds = fast_retry_delay_seconds
+    else:
+        exponential_delay_seconds = backoff_start_seconds * (
+            backoff_multiplier ** (attempt_count - fast_retry_attempts - 1)
+        )
+        retry_delay_seconds = max(fast_retry_delay_seconds, exponential_delay_seconds)
+
+    return min(retry_delay_seconds, max_delay_seconds)
+
 
 def get_ready_to_retry_attempts() -> Iterator[abd_models.TaskAttempt]:
     return (
@@ -102,22 +177,13 @@ def task_mark_as_success(task: abd_models.TaskAttempt, result_data: dict) -> Non
 
 
 def task_mark_as_failed(task: abd_models.TaskAttempt) -> None:
-    DEFAULT_BLOCK_TASK_RETRY_BACKOFF = 1
-    MAX_RETRY_DELAY_MINUTES = 1440  # 24 hours max delay
-
     task.status = task.Status.FAILED
     task.last_attempted_at = timezone.now()
     task.attempt_count += 1
 
     if task_can_retry(task):
-        base_retry_backoff = getattr(settings, "BLOCK_TASK_RETRY_BACKOFF", DEFAULT_BLOCK_TASK_RETRY_BACKOFF)
-        max_delay_minutes = getattr(settings, "BLOCK_TASK_MAX_RETRY_DELAY_MINUTES", MAX_RETRY_DELAY_MINUTES)
-
-        # Calculate exponential backoff with bounds checking
-        backoff_minutes = base_retry_backoff**task.attempt_count
-        backoff_minutes = min(backoff_minutes, max_delay_minutes)
-
-        task.next_retry_at = timezone.now() + timedelta(minutes=backoff_minutes)
+        retry_delay_seconds = _get_retry_delay_seconds(task.attempt_count)
+        task.next_retry_at = timezone.now() + timedelta(seconds=retry_delay_seconds)
     else:
         task.next_retry_at = None
     task.save()

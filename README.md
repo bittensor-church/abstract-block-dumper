@@ -314,8 +314,11 @@ BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
 BLOCK_DUMPER_RPC_TIMEOUT = 30.0  # seconds before a stalled chain read is abandoned
 BLOCK_DUMPER_LOOKBACK_ENABLED = True  # honor per-task backfilling_lookback (default True)
-BLOCK_TASK_RETRY_BACKOFF = 2  # minutes for retry backoff base
-BLOCK_DUMPER_MAX_ATTEMPTS = 3  # maximum retry attempts
+BLOCK_TASK_FAST_RETRY_ATTEMPTS = 2
+BLOCK_TASK_FAST_RETRY_DELAY_SECONDS = 5
+BLOCK_TASK_RETRY_BACKOFF_START_SECONDS = 60
+BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER = 2
+BLOCK_DUMPER_MAX_ATTEMPTS = 6  # includes the initial execution
 BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 1440  # maximum retry delay (24 hours)
 ```
 
@@ -396,7 +399,7 @@ BLOCK_DUMPER_LOOKBACK_ENABLED = True
 - **Type:** `int`
 - **Default:** `3`
 - **Valid Range:** `1` to `10`
-- **Description:** Maximum number of attempts to retry a failed task before giving up
+- **Description:** Maximum total executions, including the initial execution, before giving up
 
 ```python
 BLOCK_DUMPER_MAX_ATTEMPTS = 5
@@ -406,22 +409,84 @@ BLOCK_DUMPER_MAX_ATTEMPTS = 5
 
 ---
 
-### `BLOCK_TASK_RETRY_BACKOFF`
+### Staged retry settings
+
+Defining any one of the following settings enables staged retry behavior. Unset staged
+settings use the defaults shown below.
+
+```python
+BLOCK_TASK_FAST_RETRY_ATTEMPTS = 2
+BLOCK_TASK_FAST_RETRY_DELAY_SECONDS = 5
+BLOCK_TASK_RETRY_BACKOFF_START_SECONDS = 60
+BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER = 2
+```
+
+This configuration produces delays of 5 seconds, 5 seconds, 1 minute, 2 minutes, 4
+minutes, and so on. `BLOCK_DUMPER_MAX_ATTEMPTS` includes the initial execution, so it must
+be at least `FAST_RETRY_ATTEMPTS + 2` for the first exponential retry to run.
+
+For retry number `n`, fast-retry count `F`, fast delay `I`, backoff starting delay `B`,
+multiplier `R`, and maximum delay `C`, the delay is:
+
+- `min(C, I)` when `n <= F`
+- `min(C, max(I, B * R ** (n - F - 1)))` when `n > F`
+
+#### `BLOCK_TASK_FAST_RETRY_ATTEMPTS`
+
+- **Type:** `int`
+- **Default:** `2` in staged mode
+- **Valid Range:** Any non-negative integer
+- **Description:** Number of retries that use the constant fast-retry delay
+
+#### `BLOCK_TASK_FAST_RETRY_DELAY_SECONDS`
+
+- **Type:** `int | float`
+- **Default:** `5` in staged mode
+- **Valid Range:** Any non-negative number of seconds
+- **Description:** Delay used for every fast retry
+
+#### `BLOCK_TASK_RETRY_BACKOFF_START_SECONDS`
+
+- **Type:** `int | float`
+- **Default:** `60` in staged mode
+- **Valid Range:** Any non-negative number of seconds
+- **Description:** Exponential delay used for the first retry after the fast-retry phase
+
+#### `BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER`
+
+- **Type:** `int | float`
+- **Default:** `2` in staged mode
+- **Valid Range:** `1` or greater
+- **Description:** Dimensionless multiplier applied to each successive exponential retry
+
+The transition uses at least the fast-retry delay, and the multiplier cannot be less than
+1, guaranteeing that retry delays never decrease.
+
+> **Performance Impact:** More fast retries recover quickly from brief connectivity issues,
+> but may add load while a dependency is unavailable.
+
+---
+
+### `BLOCK_TASK_RETRY_BACKOFF` (legacy)
+
 - **Type:** `int`
 - **Default:** `1`
 - **Valid Range:** `1` to `60` (minutes)
-- **Description:** Base number of minutes for exponential backoff retry delays
-- **Calculation:** Actual delay = `backoff ** attempt_count` minutes
-  - Attempt 1: 2¹ = 2 minutes
-  - Attempt 2: 2² = 4 minutes
-  - Attempt 3: 2³ = 8 minutes
+- **Description:** Backward-compatible exponential base used only when none of the staged
+  retry settings above is defined
+- **Calculation:** Delay = `BLOCK_TASK_RETRY_BACKOFF ** attempt_count` minutes
+
+An existing project with only this setting keeps exactly the previous behavior:
 
 ```python
-BLOCK_TASK_RETRY_BACKOFF = 2
+BLOCK_TASK_RETRY_BACKOFF = 2  # delays remain 2, 4, 8, ... minutes
 ```
 
-> **Performance Impact:** Lower values retry faster but may overwhelm failing services
+**Performance Impact:** Lower values retry faster but may overwhelm failing services
 
+Internally, a legacy value `B` is equivalent to zero fast retries, a backoff starting delay
+of `B` minutes, and a multiplier of `B`. If any staged setting is defined, staged mode takes
+precedence and this legacy setting is ignored.
 ---
 
 ### `BLOCK_TASK_MAX_RETRY_DELAY_MINUTES`
