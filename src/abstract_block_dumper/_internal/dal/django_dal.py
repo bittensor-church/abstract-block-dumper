@@ -1,4 +1,5 @@
 from collections.abc import Collection, Iterator
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -10,6 +11,111 @@ from django.utils import timezone
 
 import abstract_block_dumper._internal.services.utils as abd_utils
 import abstract_block_dumper.models as abd_models
+
+DEFAULT_BLOCK_TASK_RETRY_BACKOFF = 1
+DEFAULT_BLOCK_TASK_FAST_RETRY_ATTEMPTS = 2
+DEFAULT_BLOCK_TASK_FAST_RETRY_DELAY_SECONDS = 5
+DEFAULT_BLOCK_TASK_RETRY_BACKOFF_START_SECONDS = 60
+DEFAULT_BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER = 2
+MAX_RETRY_DELAY_MINUTES = 1440  # 24 hours max delay
+
+STAGED_RETRY_SETTINGS = (
+    "BLOCK_TASK_FAST_RETRY_ATTEMPTS",
+    "BLOCK_TASK_FAST_RETRY_DELAY_SECONDS",
+    "BLOCK_TASK_RETRY_BACKOFF_START_SECONDS",
+    "BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER",
+)
+
+
+@dataclass(frozen=True)
+class _RetryPolicy:
+    """Retry schedule: a few fast retries, then a nondecreasing exponential backoff."""
+
+    fast_retry_attempts: int
+    fast_retry_delay_seconds: float
+    backoff_start_seconds: float
+    backoff_multiplier: float
+
+    def delay_seconds(self, attempt_count: int) -> float:
+        if attempt_count <= self.fast_retry_attempts:
+            return self.fast_retry_delay_seconds
+
+        exponential_delay_seconds = self.backoff_start_seconds * (
+            self.backoff_multiplier ** (attempt_count - self.fast_retry_attempts - 1)
+        )
+        return max(self.fast_retry_delay_seconds, exponential_delay_seconds)
+
+
+def _legacy_retry_policy() -> _RetryPolicy:
+    """
+    Compatibility code for old backoff behavior. If any of the new parameters are missing, then
+    fast retries are skipped and the legacy (backoff ** attempt_count) formula is used instead.
+    """
+    backoff_minutes = getattr(settings, "BLOCK_TASK_RETRY_BACKOFF", DEFAULT_BLOCK_TASK_RETRY_BACKOFF)
+    return _RetryPolicy(
+        fast_retry_attempts=0,
+        fast_retry_delay_seconds=0,
+        backoff_start_seconds=backoff_minutes * 60,
+        backoff_multiplier=backoff_minutes,
+    )
+
+
+def _staged_retry_policy() -> _RetryPolicy:
+    policy = _RetryPolicy(
+        fast_retry_attempts=getattr(
+            settings,
+            "BLOCK_TASK_FAST_RETRY_ATTEMPTS",
+            DEFAULT_BLOCK_TASK_FAST_RETRY_ATTEMPTS,
+        ),
+        fast_retry_delay_seconds=getattr(
+            settings,
+            "BLOCK_TASK_FAST_RETRY_DELAY_SECONDS",
+            DEFAULT_BLOCK_TASK_FAST_RETRY_DELAY_SECONDS,
+        ),
+        backoff_start_seconds=getattr(
+            settings,
+            "BLOCK_TASK_RETRY_BACKOFF_START_SECONDS",
+            DEFAULT_BLOCK_TASK_RETRY_BACKOFF_START_SECONDS,
+        ),
+        backoff_multiplier=getattr(
+            settings,
+            "BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER",
+            DEFAULT_BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER,
+        ),
+    )
+    _validate_staged_retry_policy(policy)
+    return policy
+
+
+def _validate_staged_retry_policy(policy: _RetryPolicy) -> None:
+    if (
+        not isinstance(policy.fast_retry_attempts, int)
+        or isinstance(policy.fast_retry_attempts, bool)
+        or policy.fast_retry_attempts < 0
+    ):
+        msg = "BLOCK_TASK_FAST_RETRY_ATTEMPTS must be a non-negative integer"
+        raise ValueError(msg)
+
+    non_negative_settings = (
+        ("BLOCK_TASK_FAST_RETRY_DELAY_SECONDS", policy.fast_retry_delay_seconds),
+        ("BLOCK_TASK_RETRY_BACKOFF_START_SECONDS", policy.backoff_start_seconds),
+    )
+    for setting_name, value in non_negative_settings:
+        if value < 0:
+            msg = f"{setting_name} must be non-negative"
+            raise ValueError(msg)
+
+    if policy.backoff_multiplier < 1:
+        msg = "BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER must be at least 1"
+        raise ValueError(msg)
+
+
+def _get_retry_delay_seconds(attempt_count: int) -> float:
+    uses_staged_settings = any(hasattr(settings, setting_name) for setting_name in STAGED_RETRY_SETTINGS)
+    policy = _staged_retry_policy() if uses_staged_settings else _legacy_retry_policy()
+
+    max_delay_seconds = getattr(settings, "BLOCK_TASK_MAX_RETRY_DELAY_MINUTES", MAX_RETRY_DELAY_MINUTES) * 60
+    return min(policy.delay_seconds(attempt_count), max_delay_seconds)
 
 
 def get_ready_to_retry_attempts() -> Iterator[abd_models.TaskAttempt]:
@@ -102,22 +208,13 @@ def task_mark_as_success(task: abd_models.TaskAttempt, result_data: dict) -> Non
 
 
 def task_mark_as_failed(task: abd_models.TaskAttempt) -> None:
-    DEFAULT_BLOCK_TASK_RETRY_BACKOFF = 1
-    MAX_RETRY_DELAY_MINUTES = 1440  # 24 hours max delay
-
     task.status = task.Status.FAILED
     task.last_attempted_at = timezone.now()
     task.attempt_count += 1
 
     if task_can_retry(task):
-        base_retry_backoff = getattr(settings, "BLOCK_TASK_RETRY_BACKOFF", DEFAULT_BLOCK_TASK_RETRY_BACKOFF)
-        max_delay_minutes = getattr(settings, "BLOCK_TASK_MAX_RETRY_DELAY_MINUTES", MAX_RETRY_DELAY_MINUTES)
-
-        # Calculate exponential backoff with bounds checking
-        backoff_minutes = base_retry_backoff**task.attempt_count
-        backoff_minutes = min(backoff_minutes, max_delay_minutes)
-
-        task.next_retry_at = timezone.now() + timedelta(minutes=backoff_minutes)
+        retry_delay_seconds = _get_retry_delay_seconds(task.attempt_count)
+        task.next_retry_at = timezone.now() + timedelta(seconds=retry_delay_seconds)
     else:
         task.next_retry_at = None
     task.save()

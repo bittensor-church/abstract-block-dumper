@@ -252,16 +252,27 @@ with the pool.
 - Indexes on `(status, next_retry_at)` and `(block_number, executable_path)` keep the
   common operational queries fast.
 
-### US-4.4 — Failed tasks retry with exponential backoff
+### US-4.4 — Failed tasks retry with staged exponential backoff
 **As an** operator, **I want** transient failures handled automatically, **so that** I do
 not babysit the queue.
 
 - An exception inside a task marks the attempt `FAILED`, increments `attempt_count`, and
   computes `next_retry_at`.
-- Delay is `BLOCK_TASK_RETRY_BACKOFF ** attempt_count` minutes (code default base `1`),
-  capped at `BLOCK_TASK_MAX_RETRY_DELAY_MINUTES` (default `1440`).
+- Defining any staged-retry setting enables a fast-retry phase followed by exponential
+  growth. For retry number `n`, fast-retry count `F`, fast delay `I`, exponential starting
+  delay `B`, multiplier `R`, and cap `C`, the delay is:
+  - `min(C, I)` when `n <= F`;
+  - `min(C, max(I, B * R ** (n - F - 1)))` when `n > F`.
+- Staged mode defaults are two fast retries at 5 seconds, then exponential delays starting
+  at 60 seconds with multiplier 2. The multiplier must be at least 1, so configured delays
+  never decrease.
+- Existing installations remain compatible: when none of the staged settings is defined,
+  delay remains `BLOCK_TASK_RETRY_BACKOFF ** attempt_count` minutes (legacy default base
+  `1`), capped at `BLOCK_TASK_MAX_RETRY_DELAY_MINUTES` (default `1440`).
 - Retrying stops once `attempt_count` reaches `BLOCK_DUMPER_MAX_ATTEMPTS` (default `3`);
   `next_retry_at` is then cleared and the attempt stays `FAILED` permanently.
+- `BLOCK_DUMPER_MAX_ATTEMPTS` includes the initial execution. For example, two fast retries
+  require at least four maximum attempts before the first exponential retry can run.
 - The retry is dispatched with an `eta`, so it occupies no worker while it waits.
 - The task's exception, type, message, and duration are logged with the task id and block
   number.
@@ -465,7 +476,11 @@ Every setting is read with `getattr(settings, ..., default)` — none is mandato
 | `BLOCK_DUMPER_RPC_TIMEOUT` | `float` | `30.0` | Deadline for a raw RPC chain read (US-3.3) |
 | `BLOCK_DUMPER_LOOKBACK_ENABLED` | `bool` | `True` | Global kill-switch for `backfilling_lookback` |
 | `BLOCK_DUMPER_MAX_ATTEMPTS` | `int` | `3` | Maximum attempts before giving up |
-| `BLOCK_TASK_RETRY_BACKOFF` | `int` | `1` | Exponential backoff base, in minutes |
+| `BLOCK_TASK_FAST_RETRY_ATTEMPTS` | `int` | `2` (staged mode) | Number of constant-delay fast retries |
+| `BLOCK_TASK_FAST_RETRY_DELAY_SECONDS` | `int \| float` | `5` (staged mode) | Fast-retry delay in seconds |
+| `BLOCK_TASK_RETRY_BACKOFF_START_SECONDS` | `int \| float` | `60` (staged mode) | First exponential delay in seconds |
+| `BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER` | `int \| float` | `2` (staged mode) | Exponential growth multiplier |
+| `BLOCK_TASK_RETRY_BACKOFF` | `int` | `1` | Legacy exponential base in minutes, used only when no staged setting is defined |
 | `BLOCK_TASK_MAX_RETRY_DELAY_MINUTES` | `int` | `1440` | Backoff cap |
 
 - The README's configuration reference is expected to match these defaults and to state
