@@ -9,6 +9,12 @@ upcoming release can be found in [changelog.d](changelog.d).
 
 <!-- towncrier release notes start -->
 
+## [0.1.11](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.11) - 2026-08-18
+
+- Added optional fast retries for failed tasks
+- Added explicit support for Python 3.14 and Django 5.2 and upgraded several libraries
+
+
 ## [0.1.10](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.10) - 2026-08-14
 
 - Added optional custom backfill queue to separate live from backfill tasks.
