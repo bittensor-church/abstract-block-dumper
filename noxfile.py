@@ -15,10 +15,19 @@ CI = os.environ.get("CI") is not None
 
 ROOT = Path(".")
 MAIN_BRANCH_NAME = "master"
-PYTHON_VERSIONS = ["3.11", "3.12"]
+PYTHON_VERSIONS = ["3.11", "3.12", "3.13", "3.14"]
+# Kept in sync with `PYTHON_DEFAULT_VERSION` in `.github/workflows/ci.yml`; the
+# `test_ci_default_python_matches_nox` test fails if the two ever drift apart.
 PYTHON_DEFAULT_VERSION = PYTHON_VERSIONS[-1]
-DJANGO_VERSIONS = ["3.2", "4.2"]
-CELERY_VERSIONS = ["5.3", "5.4", "5.5"]
+DJANGO_VERSIONS = ["3.2", "4.2", "5.2"]
+CELERY_VERSIONS = ["5.3", "5.4", "5.5", "5.6"]
+# Oldest and newest Python we run each Django release against. Django 3.2 imports the stdlib
+# `cgi` module, which was removed in Python 3.13, so it cannot run there at all.
+DJANGO_PYTHON_RANGES = {
+    "3.2": ("3.11", "3.12"),
+    "4.2": ("3.11", "3.14"),
+    "5.2": ("3.11", "3.14"),
+}
 DEMO_APP_DIR = ROOT / "demo"
 
 nox.options.default_venv_backend = "venv"
@@ -29,6 +38,9 @@ nox.options.reuse_existing_virtualenvs = not CI
 if CI:
     # In CI, use Python interpreter provided by GitHub Actions
     PYTHON_VERSIONS = [sys.executable]
+    # One CI job per (Python, Django) pair, so narrow the matrix down to this job's Django.
+    if ci_django_version := os.environ.get("DJANGO_VERSION"):
+        DJANGO_VERSIONS = [ci_django_version]
 
 
 def install(session: nox.Session, *groups, dev: bool = True, editable: bool = False, no_self=False, no_default=False):
@@ -151,10 +163,32 @@ def lint(session):
     run_readable(session, mode="check")
 
 
+def python_version(session: nox.Session) -> tuple[int, ...]:
+    """Return the `(major, minor)` version of the interpreter backing the session."""
+    # `session.python` is a bare interpreter path in CI, so ask the interpreter itself.
+    output = session.run(
+        "python",
+        "-c",
+        "import sys; print('%s.%s' % sys.version_info[:2])",
+        silent=True,
+    )
+    return tuple(int(part) for part in output.strip().split("."))
+
+
 @nox.session(python=PYTHON_VERSIONS, tags=["test", "check"])
 @nox.parametrize("django", DJANGO_VERSIONS)
 @nox.parametrize("celery", CELERY_VERSIONS)
 def test(session, django: str, celery: str):
+    def as_tuple(version: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in version.split("."))
+
+    oldest, newest = DJANGO_PYTHON_RANGES[django]
+    python = python_version(session)
+    if not as_tuple(oldest) <= python <= as_tuple(newest):
+        session.skip(
+            f"Django {django} supports Python {oldest} - {newest}, not {'.'.join(str(part) for part in python)}"
+        )
+
     install(session, "test", editable=True)
     session.run("pip", "install", f"django~={django}.0")
     session.run("pip", "install", f"celery~={celery}.0")
