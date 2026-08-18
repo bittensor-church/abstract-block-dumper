@@ -68,7 +68,7 @@ pip install abstract_block_dumper
 ```python
 INSTALLED_APPS = [
     # ... other apps
-    'abstract_block_dumper',
+    "abstract_block_dumper",
 ]
 ```
 
@@ -86,18 +86,17 @@ from celery import Celery
 from celery.signals import celeryd_init
 from django.conf import settings
 
-app = Celery('your_project')
-app.config_from_object('django.conf:settings', namespace='CELERY')
+app = Celery("your_project")
+app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
-
 
 
 @celeryd_init.connect
 def on_worker_init(**kwargs) -> None:
     """Load block tasks when worker initializes."""
     from abstract_block_dumper.v1.celery import setup_celery_tasks
-    setup_celery_tasks()
 
+    setup_celery_tasks()
 ```
 
 > **Important:** Without this step, Celery workers will not recognize your `@block_task` decorated functions, and you'll see "Received unregistered task" errors.
@@ -156,15 +155,18 @@ from abstract_block_dumper.v1.decorators import block_task
 def process_every_block(block_number: int):
     print(f"Processing every block: {block_number}")
 
+
 # Process every 10 blocks
 @block_task(condition=lambda bn: bn % 10 == 0)
 def process_every_10_blocks(block_number: int):
     print(f"Processing every 10 blocks: {block_number}")
 
+
 # Process blocks only after finalization
 @block_task(finalized=True)
 def process_finalized_block(block_number: int):
     print(f"Processing finalized block: {block_number}")
+
 
 # Process with multiple netuids
 @block_task(
@@ -195,8 +197,7 @@ bounded to at most `N` blocks of catch-up per head.
 ```python
 # On each new head, also (re)fill the previous 300 blocks for this task
 @block_task(backfilling_lookback=300, backfill_queue="index-backfill")
-def index_recent_blocks(block_number: int):
-    ...
+def index_recent_blocks(block_number: int): ...
 ```
 
 Only tasks that declare `backfilling_lookback` are backfilled this way. Already-succeeded
@@ -284,10 +285,10 @@ Add this to your Django `settings.py`:
 from celery.schedules import crontab
 
 CELERY_BEAT_SCHEDULE = {
-    'cleanup-old-tasks': {
-        'task': 'abstract_block_dumper.cleanup_old_tasks',
-        'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
-        'kwargs': {'days': 7},  # Customize retention period
+    "cleanup-old-tasks": {
+        "task": "abstract_block_dumper.cleanup_old_tasks",
+        "schedule": crontab(hour=2, minute=0),  # Daily at 2 AM
+        "kwargs": {"days": 7},  # Customize retention period
     },
 }
 ```
@@ -305,12 +306,12 @@ Add these settings to your Django `settings.py`:
 
 ```python
 # Celery Configuration
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_BROKER_URL = "redis://localhost:6379/0"
+CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
 
 # Abstract Block Dumper specific settings
-BITTENSOR_NETWORK = 'finney'  # Options: 'finney', 'local', 'test', 'devnet', 'archive'
-BLOCK_DUMPER_START_FROM_BLOCK = 'current'  # Options: None, 'current', or int
+BITTENSOR_NETWORK = "finney"  # Options: 'finney', 'local', 'test', 'devnet', 'archive'
+BLOCK_DUMPER_START_FROM_BLOCK = "current"  # Options: None, 'current', or int
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
 BLOCK_DUMPER_RPC_TIMEOUT = 30.0  # seconds before a stalled chain read is abandoned
 BLOCK_DUMPER_LOOKBACK_ENABLED = True  # honor per-task backfilling_lookback (default True)
@@ -330,7 +331,7 @@ BLOCK_TASK_MAX_RETRY_DELAY_MINUTES = 1440  # maximum retry delay (24 hours)
 - **Description:** Which [Bittensor network](https://docs.learnbittensor.org/concepts/bittensor-networks) the live scheduler (`block_tasks_v1`) connects to. The historical `backfill_blocks_v1` command overrides this per run via its `--network` flag.
 
 ```python
-BITTENSOR_NETWORK = 'finney'
+BITTENSOR_NETWORK = "finney"
 ```
 
 ---
@@ -347,7 +348,7 @@ BITTENSOR_NETWORK = 'finney'
   Each chain head resolves its own starting point, so a `finalized=True` task never inherits the latest head's position — which would make it skip the blocks that were already produced but not yet finalized at start-up.
 
 ```python
-BLOCK_DUMPER_START_FROM_BLOCK = 'current'
+BLOCK_DUMPER_START_FROM_BLOCK = "current"
 ```
 
 > **Performance Impact:** Starting from historical blocks may require significant processing time
