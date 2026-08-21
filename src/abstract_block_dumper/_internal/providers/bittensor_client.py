@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import bittensor as bt
 import structlog
 
 import abstract_block_dumper._internal.services.utils as abd_utils
+
+# Blocks older than this threshold from current head require the archive network.
+# Defined in archive_hint so the scheduler, the workers and this client agree.
+from abstract_block_dumper._internal.services.archive_hint import ARCHIVE_BLOCK_THRESHOLD, head_cache_ttl
 
 if TYPE_CHECKING:
     import types
@@ -15,10 +20,6 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
-
-
-# Blocks older than this threshold from current head require archive network
-ARCHIVE_BLOCK_THRESHOLD = 300
 
 # A raw RPC call that has not answered by now is treated as a stalled connection. The
 # scheduler drives these reads from its single thread, so an unbounded wait on one
@@ -41,6 +42,7 @@ class BittensorConnectionClient:
         self._subtensor: bt.Subtensor | None = None
         self._archive_subtensor: bt.Subtensor | None = None
         self._current_block_cache: int | None = None
+        self._current_block_cached_at: float | None = None
         self._rpc_substrate: bt.RpcSubstrate | None = None
         self._rpc_loop: asyncio.AbstractEventLoop | None = None
 
@@ -79,6 +81,7 @@ class BittensorConnectionClient:
             self._archive_subtensor = None
 
         self._current_block_cache = None
+        self._current_block_cached_at = None
         logger.debug("Subtensor connections closed")
 
     def get_block(self, *, finalized: bool = False) -> int:
@@ -167,6 +170,26 @@ class BittensorConnectionClient:
         """Set or reset the archive subtensor connection."""
         self._archive_subtensor = value
 
+    def _current_head(self) -> int:
+        """
+        Return the chain head, re-reading it once the cached value ages out.
+
+        This client outlives any single block: the scheduler holds one for its whole
+        run. A head cached once and never refreshed only ever understates how far
+        behind a block is, which sends historical blocks to the pruned node.
+        """
+        now = time.monotonic()
+        if (
+            self._current_block_cache is not None
+            and self._current_block_cached_at is not None
+            and (now - self._current_block_cached_at) < head_cache_ttl()
+        ):
+            return self._current_block_cache
+
+        self._current_block_cache = self.subtensor.block
+        self._current_block_cached_at = now
+        return self._current_block_cache
+
     def get_subtensor_for_block(self, block_number: int) -> bt.Subtensor:
         """
         Get the appropriate subtensor for the given block number.
@@ -174,10 +197,7 @@ class BittensorConnectionClient:
         Uses archive network for blocks older than ARCHIVE_BLOCK_THRESHOLD
         from the current head.
         """
-        if self._current_block_cache is None:
-            self._current_block_cache = self.subtensor.block
-
-        blocks_behind = self._current_block_cache - block_number
+        blocks_behind = self._current_head() - block_number
 
         if blocks_behind > ARCHIVE_BLOCK_THRESHOLD:
             logger.debug(

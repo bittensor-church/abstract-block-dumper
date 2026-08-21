@@ -11,6 +11,7 @@ import abstract_block_dumper._internal.dal.django_dal as abd_dal
 import abstract_block_dumper._internal.services.utils as abd_utils
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem, task_registry
 from abstract_block_dumper._internal.exceptions import CeleryTaskLockedError
+from abstract_block_dumper._internal.services.archive_hint import resolve_use_archive_network
 from abstract_block_dumper._internal.services.block_source import FINALIZED_BLOCK_SOURCE, LATEST_BLOCK_SOURCE
 from abstract_block_dumper._internal.services.metrics import (
     observe_task_execution_time,
@@ -90,7 +91,7 @@ def _celery_task_wrapper(
     executable_path = abd_utils.get_executable_path(func)
 
     # Extract runtime hints that shouldn't be stored in DB
-    use_archive_network = kwargs.pop("_use_archive_network", False)
+    use_archive_network = bool(kwargs.pop("_use_archive_network", False))
 
     # Create db_kwargs without runtime hints for DB lookup
     db_kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
@@ -131,6 +132,12 @@ def _celery_task_wrapper(
         sig = inspect.signature(func)
         has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
         if has_var_keyword:
+            # The hint is computed at dispatch but travels only in the Celery message,
+            # so retries -- which rebuild their kwargs from the TaskAttempt row -- arrive
+            # without it. Resolve it here instead. The head only moves forward, so this
+            # can only ever correct a missing hint upwards. Resolved lazily, because
+            # only a function taking **kwargs ever receives the result.
+            use_archive_network = resolve_use_archive_network(block_number, hint=use_archive_network)
             execution_kwargs["_use_archive_network"] = use_archive_network
 
         task_name = executable_path.split(".")[-1]  # Get short task name
