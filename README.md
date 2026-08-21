@@ -52,7 +52,7 @@ Task attempts are stored in TaskAttempt model with retry logic and state trackin
 
 
 ## Prerequisites
-- Django
+- Django 5.2, 6.0 or 6.1
 - Celery
 - Redis (for Celery broker and result backend)
 - PostgreSQL (recommended for production)

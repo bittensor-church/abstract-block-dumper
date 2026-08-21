@@ -19,14 +19,14 @@ PYTHON_VERSIONS = ["3.11", "3.12", "3.13", "3.14"]
 # Kept in sync with `PYTHON_DEFAULT_VERSION` in `.github/workflows/ci.yml`; the
 # `test_ci_default_python_matches_nox` test fails if the two ever drift apart.
 PYTHON_DEFAULT_VERSION = PYTHON_VERSIONS[-1]
-DJANGO_VERSIONS = ["3.2", "4.2", "5.2"]
+DJANGO_VERSIONS = ["5.2", "6.0", "6.1"]
 CELERY_VERSIONS = ["5.3", "5.4", "5.5", "5.6"]
-# Oldest and newest Python we run each Django release against. Django 3.2 imports the stdlib
-# `cgi` module, which was removed in Python 3.13, so it cannot run there at all.
+# Oldest and newest Python we run each Django release against. Django 6.0 dropped support for
+# Python 3.11, so the 6.x series only runs on 3.12 and newer.
 DJANGO_PYTHON_RANGES = {
-    "3.2": ("3.11", "3.12"),
-    "4.2": ("3.11", "3.14"),
     "5.2": ("3.11", "3.14"),
+    "6.0": ("3.12", "3.14"),
+    "6.1": ("3.12", "3.14"),
 }
 DEMO_APP_DIR = ROOT / "demo"
 
