@@ -39,13 +39,13 @@ jobs:
       matrix:
         os: ["ubuntu-latest"]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
-        django-version: ["3.2", "4.2", "5.2"]
+        django-version: ["5.2", "6.0", "6.1"]
         exclude:
-          # Django 3.2 imports the stdlib `cgi` module, removed in Python 3.13
-          - python-version: "3.13"
-            django-version: "3.2"
-          - python-version: "3.14"
-            django-version: "3.2"
+          # Django 6.0 dropped support for Python 3.11
+          - python-version: "3.11"
+            django-version: "6.0"
+          - python-version: "3.11"
+            django-version: "6.1"
     steps:
       - uses: actions/checkout@v4
         with:
