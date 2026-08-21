@@ -12,14 +12,12 @@ import structlog
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
+from abstract_block_dumper._internal.services.archive_hint import ARCHIVE_BLOCK_THRESHOLD
 from abstract_block_dumper._internal.services.executor import CeleryExecutor
 from abstract_block_dumper._internal.services.metrics import increment_archive_network_usage
 from abstract_block_dumper._internal.services.utils import serialize_args
 
 logger = structlog.get_logger(__name__)
-
-# Blocks older than this threshold from the current head require the archive network.
-ARCHIVE_BLOCK_THRESHOLD = 300
 
 
 class WindowBackfiller:

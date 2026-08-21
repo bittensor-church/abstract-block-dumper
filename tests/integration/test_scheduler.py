@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 import bittensor as bt
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
@@ -338,6 +339,42 @@ def test_bittensor_client_uses_archive_for_old_blocks(
     just_over_threshold_block = 699  # 301 blocks behind
     result = client.get_subtensor_for_block(just_over_threshold_block)
     assert result is mock_archive_subtensor
+
+
+@override_settings(BLOCK_DUMPER_HEAD_CACHE_TTL=0)
+def test_head_cache_expires_so_a_long_running_scheduler_notices_the_chain_moved(
+    mock_subtensor,
+    mock_archive_subtensor,
+) -> None:
+    """
+    A scheduler stays up for days, and the head it compares against must not.
+
+    A head cached once and never refreshed only ever understates how far behind a
+    block is, so it sends historical blocks to the plain, pruned node.
+    """
+    client = BittensorConnectionClient(network="testnet")
+    client._subtensor = mock_subtensor
+    client._archive_subtensor = mock_archive_subtensor
+
+    # Block 900 is 100 behind the head of 1000, so the plain node serves it.
+    assert client.get_subtensor_for_block(900) is mock_subtensor
+
+    # The scheduler keeps running and the chain moves on without it.
+    mock_subtensor.set_current_block(5000)
+
+    assert client.get_subtensor_for_block(900) is mock_archive_subtensor
+
+
+def test_head_is_read_once_within_the_cache_ttl(mock_subtensor, mock_archive_subtensor) -> None:
+    """Refreshing must not turn into a head read per task."""
+    client = BittensorConnectionClient(network="testnet")
+    client._subtensor = mock_subtensor
+    client._archive_subtensor = mock_archive_subtensor
+
+    for block_number in range(900, 905):
+        client.get_subtensor_for_block(block_number)
+
+    assert mock_subtensor.block_reads == 1
 
 
 def _mocked_rpc_substrate(

@@ -314,6 +314,7 @@ BITTENSOR_NETWORK = "finney"  # Options: 'finney', 'local', 'test', 'devnet', 'a
 BLOCK_DUMPER_START_FROM_BLOCK = "current"  # Options: None, 'current', or int
 BLOCK_DUMPER_POLL_INTERVAL = 1  # seconds between polling for new blocks
 BLOCK_DUMPER_RPC_TIMEOUT = 30.0  # seconds before a stalled chain read is abandoned
+BLOCK_DUMPER_HEAD_CACHE_TTL = 12.0  # seconds a cached chain head is reused for archive routing
 BLOCK_DUMPER_LOOKBACK_ENABLED = True  # honor per-task backfilling_lookback (default True)
 BLOCK_TASK_FAST_RETRY_ATTEMPTS = 2
 BLOCK_TASK_FAST_RETRY_DELAY_SECONDS = 5
@@ -382,6 +383,19 @@ BLOCK_DUMPER_RPC_TIMEOUT = 30.0
 ```
 
 > Set it above your node's slowest healthy response time; a value below that turns normal slowness into repeated reconnects.
+
+---
+
+### `BLOCK_DUMPER_HEAD_CACHE_TTL`
+- **Type:** `float`
+- **Default:** `12.0`
+- **Description:** How long a reading of the current block height may be reused, in seconds. Blocks more than 300 behind the chain head have to be read from the archive network, so the scheduler and the workers both need to know how far along the chain is. Looking that up for every single block would be wasteful, so the answer is remembered for this long. The default is roughly one block.
+
+```python
+BLOCK_DUMPER_HEAD_CACHE_TTL = 12.0
+```
+
+> Raise it to make fewer lookups, lower it if blocks near the 300-block boundary are being sent to the wrong network.
 
 ---
 
