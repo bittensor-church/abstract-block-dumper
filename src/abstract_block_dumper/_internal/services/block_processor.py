@@ -1,15 +1,17 @@
-import itertools
-import time
 from collections.abc import Iterable
+from datetime import datetime, timedelta
 from typing import Protocol
 
 import structlog
 from django.db import transaction
+from django.utils import timezone
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
 from abstract_block_dumper._internal.dal.memory_registry import BaseRegistry, RegistryItem, task_registry
 from abstract_block_dumper._internal.exceptions import ConditionEvaluationError
 from abstract_block_dumper._internal.services.executor import CeleryExecutor
+from abstract_block_dumper._internal.services.metrics import increment_archive_network_usage, record_task_recovered
+from abstract_block_dumper._internal.services.window_backfiller import ARCHIVE_BLOCK_THRESHOLD
 from abstract_block_dumper.models import TaskAttempt
 
 logger = structlog.get_logger(__name__)
@@ -34,8 +36,8 @@ class BaseBlockProcessor(Protocol):
         """Process a single registry item for a given block."""
         ...
 
-    def recover_failed_retries(self, poll_interval: int, batch_size: int | None = None) -> None:
-        """Recover failed tasks that are ready to be retried."""
+    def reconcile_stuck_tasks(self, *, stale_after_seconds: float, limit: int, head_block: int | None) -> int:
+        """Re-dispatch attempts the database says should run but nothing is carrying."""
         ...
 
 
@@ -78,97 +80,84 @@ class BlockProcessor:
             except Exception:
                 logger.exception("Unexpected error processing task")
 
-    def recover_failed_retries(self, poll_interval: int, batch_size: int | None = None) -> None:
+    def reconcile_stuck_tasks(self, *, stale_after_seconds: float, limit: int, head_block: int | None) -> int:
         """
-        Recover failed tasks that are ready to be retried.
+        Re-dispatch attempts the database says should run but nothing is carrying.
 
-        This handles tasks that may have been lost due to scheduler restarts.
+        An attempt is stuck when its Celery message was lost after the row was committed:
+        the database or broker was unreachable, a worker died, or a FAILED row's retry was
+        never enqueued. See `abd_dal.get_stuck_task_attempt_ids` for the exact predicate.
+        Each row is claimed under its row lock, so an attempt a worker is executing right
+        now is skipped, and handed back to the executor on the queue it was originally
+        submitted to. A re-dispatch does not count as an attempt.
 
         Args:
-            poll_interval: Seconds to sleep between processing each retry.
-            batch_size: Maximum number of retries to process. If None, process all.
+            stale_after_seconds: How long an attempt may sit without progress before it
+                counts as stuck.
+            limit: Maximum number of attempts to re-dispatch in this call.
+            head_block: Current chain head, used to decide whether the re-dispatched block
+                needs the archive network. None means unknown, i.e. never archive.
+
+        Returns:
+            The number of attempts re-dispatched.
 
         """
-        retry_count = 0
-        retry_attempts = abd_dal.get_ready_to_retry_attempts()
-
-        # Apply batch size limit if specified (use islice for iterator compatibility)
-        if batch_size is not None:
-            retry_attempts = itertools.islice(retry_attempts, batch_size)
-
-        for retry_attempt in retry_attempts:
-            time.sleep(poll_interval)
+        stale_before = timezone.now() - timedelta(seconds=stale_after_seconds)
+        recovered = 0
+        for task_id in abd_dal.get_stuck_task_attempt_ids(stale_before, limit):
             try:
-                # Find the registry item to get celery_kwargs
-                registry_item = self.registry.get_by_executable_path(retry_attempt.executable_path)
-                if not registry_item:
-                    logger.warning(
-                        "Registry item not found for failed task, skipping retry recovery",
-                        task_id=retry_attempt.id,
-                        executable_path=retry_attempt.executable_path,
-                    )
-                    continue
-
-                # Use atomic transaction to prevent race conditions
-                with transaction.atomic():
-                    # Re-fetch with select_for_update to prevent concurrent modifications
-                    task_attempt = TaskAttempt.objects.select_for_update(nowait=True).get(id=retry_attempt.id)
-
-                    # Verify task is still in FAILED state and ready for retry
-                    if task_attempt.status == TaskAttempt.Status.SUCCESS:
-                        logger.info(
-                            "Task was already recovered",
-                            task_id=task_attempt.id,
-                            current_status=task_attempt.status,
-                        )
-                        continue
-
-                    if not abd_dal.task_can_retry(task_attempt):
-                        logger.info(
-                            "Task cannot be retried, skipping recovery",
-                            task_id=task_attempt.id,
-                            attempt_count=task_attempt.attempt_count,
-                        )
-                        continue
-
-                    # Reset to PENDING and clear celery_task_id
-                    abd_dal.reset_to_pending(task_attempt)
-
-                # Execute outside of transaction to avoid holding locks too long
-                queue = task_attempt.celery_queue_override
-                self.executor.execute(
-                    registry_item,
-                    task_attempt.block_number,
-                    task_attempt.args_dict,
-                    queue=queue,
-                )
-                retry_count += 1
-
-                logger.info(
-                    "Recovered orphaned retry",
-                    task_id=task_attempt.id,
-                    block_number=task_attempt.block_number,
-                    attempt_count=task_attempt.attempt_count,
-                    queue=queue,
-                )
+                if self._reconcile_stuck_task(task_id, stale_before, head_block):
+                    recovered += 1
             except Exception:
-                logger.exception(
-                    "Failed to recover retry",
-                    task_id=retry_attempt.id,
-                )
-                # Reload task to see current state after potential execution failure
-                try:
-                    retry_attempt.refresh_from_db()
-                    # If task is still PENDING after error, revert to FAILED
-                    # (execution may have failed before celery task could mark it)
-                    if retry_attempt.status == TaskAttempt.Status.PENDING:
-                        abd_dal.revert_to_failed(retry_attempt)
-                except TaskAttempt.DoesNotExist:
-                    # Task was deleted during recovery, nothing to revert
-                    pass
+                logger.exception("Failed to reconcile stuck task", task_id=task_id)
+        return recovered
 
-        if retry_count > 0:
-            logger.info("Retry recovery completed", recovered_count=retry_count)
+    def _reconcile_stuck_task(self, task_id: int, stale_before: datetime, head_block: int | None) -> bool:
+        with transaction.atomic():
+            # skip_locked: a row whose worker is mid-execution is locked by that worker's
+            # transaction, so it comes back empty here and is left alone.
+            task_attempt = TaskAttempt.objects.select_for_update(skip_locked=True).filter(id=task_id).first()
+            if task_attempt is None or not abd_dal.is_stuck(task_attempt, stale_before):
+                return False
+
+            registry_item = self.registry.get_by_executable_path(task_attempt.executable_path)
+            if registry_item is None:
+                logger.warning(
+                    "Registry item not found for stuck task, leaving it as is",
+                    task_id=task_attempt.id,
+                    executable_path=task_attempt.executable_path,
+                )
+                return False
+
+            previous_status = task_attempt.status
+            # The claim: bumps updated_at, so if the dispatch below fails the row is picked
+            # up again one timeout later rather than on every sweep.
+            abd_dal.reset_to_pending(task_attempt)
+
+        use_archive = head_block is not None and (head_block - task_attempt.block_number) > ARCHIVE_BLOCK_THRESHOLD
+        if use_archive:
+            increment_archive_network_usage()
+        queue = task_attempt.celery_queue_override
+        self.executor.execute(
+            registry_item,
+            task_attempt.block_number,
+            task_attempt.args_dict,
+            use_archive=use_archive,
+            queue=queue,
+        )
+
+        record_task_recovered(task_attempt.executable_path.split(".")[-1], previous_status)
+        logger.warning(
+            "Recovered stuck task",
+            task_id=task_attempt.id,
+            block_number=task_attempt.block_number,
+            executable_path=task_attempt.executable_path,
+            previous_status=previous_status,
+            attempt_count=task_attempt.attempt_count,
+            queue=queue,
+            use_archive=use_archive,
+        )
+        return True
 
     def _cleanup_phantom_tasks(self) -> None:
         """

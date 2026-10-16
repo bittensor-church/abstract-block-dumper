@@ -1,4 +1,4 @@
-from collections.abc import Collection, Iterator
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -119,20 +119,6 @@ def _get_retry_delay_seconds(attempt_count: int) -> float:
 
     max_delay_seconds = getattr(settings, "BLOCK_TASK_MAX_RETRY_DELAY_MINUTES", MAX_RETRY_DELAY_MINUTES) * 60
     return min(policy.delay_seconds(attempt_count), max_delay_seconds)
-
-
-def get_ready_to_retry_attempts() -> Iterator[abd_models.TaskAttempt]:
-    return (
-        abd_models.TaskAttempt.objects.filter(
-            next_retry_at__isnull=False,
-            next_retry_at__lte=timezone.now(),
-            attempt_count__lt=abd_utils.get_max_attempt_limit(),
-        )
-        .exclude(
-            status=abd_models.TaskAttempt.Status.SUCCESS,
-        )
-        .iterator()
-    )
 
 
 def executed_block_numbers(executable_path: str, args_json: str, from_block: int, to_block: int) -> set[int]:
