@@ -81,9 +81,7 @@ PREDICATE_CASES = [
     ids=[case[0] for case in PREDICATE_CASES],
 )
 def test_stuck_predicate(status, updated_ago, next_retry_in, attempt_count, expected):
-    attempt = _attempt(
-        status=status, updated_ago=updated_ago, next_retry_in=next_retry_in, attempt_count=attempt_count
-    )
+    attempt = _attempt(status=status, updated_ago=updated_ago, next_retry_in=next_retry_in, attempt_count=attempt_count)
     cutoff = _cutoff()
 
     assert abd_dal.get_stuck_task_attempt_ids(cutoff, limit=10) == ([attempt.id] if expected else [])

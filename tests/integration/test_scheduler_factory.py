@@ -74,14 +74,46 @@ def test_factory_accepts_none_to_disable_the_sweep(mock_get_bittensor_client):
 @pytest.mark.parametrize(
     ("setting", "value", "message"),
     [
-        ("BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS", 0, "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS must be a positive number or None"),
-        ("BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS", "30", "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS must be a positive number or None"),
-        ("BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS", True, "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS must be a positive number or None"),
-        ("BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS", -1, "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS must be a positive number"),
-        ("BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS", None, "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS must be a positive number"),
-        ("BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE", 0, "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE must be a positive integer"),
-        ("BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE", 2.5, "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE must be a positive integer"),
-        ("BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE", True, "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE must be a positive integer"),
+        (
+            "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS",
+            0,
+            "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS must be a positive number or None",
+        ),
+        (
+            "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS",
+            "30",
+            "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS must be a positive number or None",
+        ),
+        (
+            "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS",
+            True,
+            "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS must be a positive number or None",
+        ),
+        (
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS",
+            -1,
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS must be a positive number",
+        ),
+        (
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS",
+            None,
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS must be a positive number",
+        ),
+        (
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE",
+            0,
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE must be a positive integer",
+        ),
+        (
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE",
+            2.5,
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE must be a positive integer",
+        ),
+        (
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE",
+            True,
+            "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE must be a positive integer",
+        ),
     ],
 )
 @patch("abstract_block_dumper._internal.services.utils.get_bittensor_client")

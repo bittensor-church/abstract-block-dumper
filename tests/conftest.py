@@ -33,7 +33,9 @@ class MockedBlockProcessor:
         self.processed_registry_items.append((registry_item, block_number))
 
     def reconcile_stuck_tasks(self, *, stale_after_seconds: float, limit: int, head_block: int | None) -> int:
-        self.reconcile_calls.append({"stale_after_seconds": stale_after_seconds, "limit": limit, "head_block": head_block})
+        self.reconcile_calls.append(
+            {"stale_after_seconds": stale_after_seconds, "limit": limit, "head_block": head_block}
+        )
         return 0
 
 
