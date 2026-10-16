@@ -1,8 +1,11 @@
+import threading
 from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+from django.conf import settings
+from django.db import connection, transaction
 from django.utils import timezone
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
@@ -207,3 +210,42 @@ def test_a_failing_dispatch_keeps_the_claim_and_does_not_stop_the_sweep():
     assert first.status == PENDING
     assert first.updated_at > _cutoff()
     assert second.updated_at > _cutoff()
+
+
+@pytest.mark.skipif("sqlite" in settings.DATABASES["default"]["ENGINE"], reason="SQLite lacks row-level locking")
+@pytest.mark.django_db(transaction=True)
+def test_attempt_locked_by_an_executing_worker_is_left_alone():
+    """A worker holds the row lock for the whole execution; skip_locked must honour it."""
+    block_task(_some_task)
+    registry_item = task_registry.get_by_executable_path(SOME_TASK_PATH)
+    assert registry_item is not None
+    attempt = _attempt(status=PENDING, updated_ago=timedelta(hours=1), executable_path=SOME_TASK_PATH)
+    before = attempt.updated_at
+
+    locked = threading.Event()
+    release = threading.Event()
+
+    def hold_row_lock() -> None:
+        try:
+            with transaction.atomic():
+                TaskAttempt.objects.select_for_update().get(id=attempt.id)
+                locked.set()
+                release.wait(timeout=10)
+        finally:
+            connection.close()
+
+    worker = threading.Thread(target=hold_row_lock)
+    worker.start()
+    assert locked.wait(timeout=10)
+    try:
+        with patch.object(registry_item.function, "apply_async") as mock_apply_async:
+            recovered = _sweep()
+    finally:
+        release.set()
+        worker.join(timeout=10)
+
+    assert recovered == 0
+    mock_apply_async.assert_not_called()
+    attempt.refresh_from_db()
+    assert attempt.status == PENDING
+    assert attempt.updated_at == before
