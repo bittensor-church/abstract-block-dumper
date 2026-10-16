@@ -4,7 +4,7 @@ from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.db.models import Max, Min
 from django.db.models.query import QuerySet
 from django.utils import timezone
@@ -18,6 +18,9 @@ DEFAULT_BLOCK_TASK_FAST_RETRY_DELAY_SECONDS = 5
 DEFAULT_BLOCK_TASK_RETRY_BACKOFF_START_SECONDS = 60
 DEFAULT_BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER = 2
 MAX_RETRY_DELAY_MINUTES = 1440  # 24 hours max delay
+
+# SQLSTATE PostgreSQL raises when `SELECT ... FOR UPDATE NOWAIT` finds the row locked.
+PG_LOCK_NOT_AVAILABLE = "55P03"
 
 STAGED_RETRY_SETTINGS = (
     "BLOCK_TASK_FAST_RETRY_ATTEMPTS",
@@ -233,6 +236,21 @@ def task_schedule_to_retry(task: abd_models.TaskAttempt, queue: str | None) -> N
     task.status = abd_models.TaskAttempt.Status.PENDING
     task.celery_queue_override = queue
     task.save()
+
+
+def is_lock_not_available(exc: OperationalError) -> bool:
+    """
+    True when `exc` wraps PostgreSQL's lock_not_available error (SQLSTATE 55P03).
+
+    Django re-raises the driver exception as `OperationalError` with the original as
+    `__cause__`; psycopg 3 exposes the code as `sqlstate`, psycopg2 as `pgcode`. Any other
+    `OperationalError` from a row lock - no code at all, or a connection-class code such as
+    08006 - is a connectivity failure, not contention. Backends without SQLSTATE (SQLite)
+    never report contention, which is right: they do not implement NOWAIT.
+    """
+    cause = exc.__cause__
+    code = getattr(cause, "sqlstate", None) or getattr(cause, "pgcode", None)
+    return code == PG_LOCK_NOT_AVAILABLE
 
 
 def task_create_or_get_pending(
