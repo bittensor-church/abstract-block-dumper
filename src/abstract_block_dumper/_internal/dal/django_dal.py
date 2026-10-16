@@ -223,10 +223,14 @@ def task_mark_as_failed(task: abd_models.TaskAttempt) -> None:
     task.save()
 
 
-def task_record_queue_override(task: abd_models.TaskAttempt, queue: str | None) -> None:
-    """Record the queue override a submission used, so its retries can reuse it."""
-    if task.celery_queue_override == queue:
-        return
+def task_record_dispatch(task: abd_models.TaskAttempt, queue: str | None) -> None:
+    """
+    Record that the task was just handed to Celery, and on which queue override.
+
+    Always touches `updated_at`, even when the queue is unchanged: on a PENDING row it
+    means "last dispatched at", which is what the stuck-task sweep measures staleness
+    against. The queue is kept so retries can be re-dispatched to the same place.
+    """
     task.celery_queue_override = queue
     task.save(update_fields=["celery_queue_override", "updated_at"])
 

@@ -95,3 +95,21 @@ def test_skipped_resubmission_leaves_the_recorded_queue_alone():
     attempt.refresh_from_db()
     assert attempt.celery_queue_override == "block-backfill"
     assert item.function.apply_async.call_count == 1
+
+
+@pytest.mark.django_db
+def test_redispatching_a_pending_attempt_refreshes_updated_at_even_when_the_queue_is_unchanged():
+    """`updated_at` on a PENDING row must mean "last dispatched at" for the stuck-task sweep."""
+    item = _make_item()
+    executor = CeleryExecutor()
+
+    executor.execute(item, 100, {}, queue="block-backfill")
+    stale = timezone.now() - timedelta(hours=2)
+    TaskAttempt.objects.update(updated_at=stale)
+
+    executor.execute(item, 100, {}, queue="block-backfill")
+
+    attempt = TaskAttempt.objects.get()
+    assert attempt.updated_at > stale
+    assert attempt.celery_queue_override == "block-backfill"
+    assert item.function.apply_async.call_count == 2
