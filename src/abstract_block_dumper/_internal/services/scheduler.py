@@ -279,6 +279,30 @@ class TaskScheduler:
         logger.info("TaskScheduler stopped.")
 
 
+def _is_positive_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and value > 0
+
+
+def _stale_task_settings() -> tuple[float | None, float, int]:
+    """Read and validate the stuck-task sweep settings."""
+    timeout = getattr(settings, "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS", DEFAULT_STALE_TASK_TIMEOUT_SECONDS)
+    interval = getattr(
+        settings, "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS", DEFAULT_STALE_TASK_SWEEP_INTERVAL_SECONDS
+    )
+    batch_size = getattr(settings, "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE", DEFAULT_STALE_TASK_SWEEP_BATCH_SIZE)
+
+    if timeout is not None and not _is_positive_number(timeout):
+        msg = "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS must be a positive number or None"
+        raise ValueError(msg)
+    if not _is_positive_number(interval):
+        msg = "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS must be a positive number"
+        raise ValueError(msg)
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        msg = "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE must be a positive integer"
+        raise ValueError(msg)
+    return timeout, interval, batch_size
+
+
 def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
     """
     Factory for TaskScheduler.
@@ -296,6 +320,7 @@ def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
     )
     state_resolver = DefaultBlockStateResolver(bittensor_client=bittensor_client)
     block_processor = block_processor_factory()
+    stale_task_timeout, stale_task_sweep_interval, stale_task_batch_size = _stale_task_settings()
     return TaskScheduler(
         block_processor=block_processor,
         poll_interval=getattr(settings, "BLOCK_DUMPER_POLL_INTERVAL", 5),
@@ -303,4 +328,7 @@ def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
         state_resolver=state_resolver,
         window_backfiller=WindowBackfiller(block_processor.executor),
         lookback_enabled=getattr(settings, "BLOCK_DUMPER_LOOKBACK_ENABLED", True),
+        stale_task_timeout=stale_task_timeout,
+        stale_task_sweep_interval=stale_task_sweep_interval,
+        stale_task_batch_size=stale_task_batch_size,
     )
