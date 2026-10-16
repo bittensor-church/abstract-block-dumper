@@ -108,6 +108,16 @@ def _celery_task_wrapper(
             raise CeleryTaskLockedError(msg) from exc
 
         except OperationalError as e:
+            if not abd_dal.is_lock_not_available(e):
+                # Not contention: the database itself is unreachable. Let it propagate so
+                # the failure is visible; the stuck-task sweep re-dispatches the row later.
+                logger.error(
+                    "Database unavailable while claiming task",
+                    block_number=block_number,
+                    executable_path=executable_path,
+                    exc_info=True,
+                )
+                raise
             msg = "Task already being processed by another worker"
             logger.info(msg, block_number=block_number, executable_path=executable_path, operational_error=str(e))
             raise CeleryTaskLockedError(msg) from e

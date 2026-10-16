@@ -183,7 +183,8 @@ def process_multi_netuid_task(block_number: int, netuid: int):
 
 ## Backfilling Missed Blocks
 
-Two mechanisms process blocks the live scheduler did not handle in real time.
+Two mechanisms process blocks the live scheduler did not handle in real time, and a third
+re-dispatches task attempts that were recorded but never ran.
 
 ### 1. Per-task lookback (`backfilling_lookback`)
 
@@ -215,8 +216,8 @@ submissions use the same routing. Leading and trailing whitespace is stripped fr
 configured `backfill_queue`; values that are empty after stripping, or are not strings,
 raise `ValueError` when the task is decorated. Automatic retries preserve the queue used
 for the original submission — it is recorded on the `TaskAttempt` row, so retries
-re-dispatched by a worker and retries recovered from the database after a restart both
-stay on it.
+re-dispatched by a worker and attempts re-dispatched by the reconciliation sweep (see
+[Recovering stuck task attempts](#3-recovering-stuck-task-attempts)) both stay on it.
 
 ### 2. Historical backfill command (`backfill_blocks_v1`)
 
@@ -243,6 +244,42 @@ present in the database. Blocks older than ~300 from the current head are automa
 fetched via the archive network.
 
 The historical command honors each task's `backfill_queue` annotation.
+
+### 3. Recovering stuck task attempts
+
+Every submission is recorded as a `TaskAttempt` row **before** the Celery message is sent,
+and the worker only marks the row `SUCCESS` or `FAILED` once it has run. If the database or
+the broker is unreachable in between, or a worker dies mid-task, the message is gone but the
+row stays `PENDING` — and nothing in the normal flow would ever pick it up again. The same
+applies to a `FAILED` row whose retry the worker could not enqueue.
+
+The live scheduler therefore runs a periodic **reconciliation sweep**. An attempt counts as
+stuck when its last expected activity is older than
+`BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS`:
+
+- `PENDING` / `RUNNING`: last dispatched (`updated_at`) before the cutoff, and any retry ETA
+  (`next_retry_at`) also before it;
+- `FAILED`: a retry was scheduled (`next_retry_at`) and its time passed the cutoff;
+- in both cases, `attempt_count` is still below `BLOCK_DUMPER_MAX_ATTEMPTS`.
+
+Each stuck attempt is reset to `PENDING` and re-dispatched through the normal executor on the
+queue recorded at its original submission, with the archive-network hint recomputed from the
+current head. A re-dispatch does not consume an attempt. Attempts a worker is executing right
+now hold their row lock and are skipped. Re-dispatching a message that was merely slow is
+harmless: the worker takes the row lock and only runs attempts that are still `PENDING`, so a
+duplicate either finds the row locked or already finished.
+
+Each recovery is logged at WARNING and counted in the
+`block_dumper_tasks_recovered_total{task_name,previous_status}` Prometheus counter. Tune the
+timeout to exceed the longest time a message can legitimately wait in a queue plus execute —
+deep backfills on a small worker pool may need a larger value — or set it to `None` to
+disable the sweep. See `BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS` and
+`BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE` in the
+[Configuration Options Reference](#configuration-options-reference).
+
+For protection at the Celery level as well — for example to keep a message on the broker
+while a worker's database connection is down — pass the usual Celery options through
+`celery_kwargs`, e.g. `celery_kwargs={"acks_late": True}`.
 
 
 ## Maintenance Tasks
@@ -392,6 +429,41 @@ BLOCK_DUMPER_RPC_TIMEOUT = 30.0
 
 ```python
 BLOCK_DUMPER_LOOKBACK_ENABLED = True
+```
+
+---
+
+### `BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS`
+- **Type:** `int | float | None`
+- **Default:** `1800` (30 minutes)
+- **Description:** How long a task attempt may sit without progress before the live scheduler's reconciliation sweep treats it as stuck and re-dispatches it (see [Recovering stuck task attempts](#3-recovering-stuck-task-attempts)). Must exceed the longest time a message can legitimately wait in a queue plus execute. `None` disables the sweep.
+
+```python
+BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS = 3600  # one hour
+```
+
+> **Performance Impact:** Too low a value re-dispatches slow-but-healthy messages; duplicates are harmless for correctness but waste worker slots.
+
+---
+
+### `BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS`
+- **Type:** `int | float`
+- **Default:** `60`
+- **Description:** Minimum seconds between two reconciliation sweeps in the live scheduler.
+
+```python
+BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS = 120
+```
+
+---
+
+### `BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE`
+- **Type:** `int`
+- **Default:** `200`
+- **Description:** Maximum number of stuck attempts re-dispatched per sweep. After a long outage the backlog drains over several sweeps instead of flooding the broker at once.
+
+```python
+BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE = 500
 ```
 
 ---

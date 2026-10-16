@@ -24,7 +24,7 @@ class MockedBlockProcessor:
         self.registry = registry or task_registry
         self.processed_blocks: list[int] = []
         self.processed_registry_items: list[tuple[RegistryItem, int]] = []
-        self.recover_failed_retries_calls: list[tuple[int, int | None]] = []
+        self.reconcile_calls: list[dict[str, Any]] = []
 
     def process_block(self, block_number: int, *, registry_items=None) -> None:
         self.processed_blocks.append(block_number)
@@ -32,8 +32,11 @@ class MockedBlockProcessor:
     def process_registry_item(self, registry_item: RegistryItem, block_number: int) -> None:
         self.processed_registry_items.append((registry_item, block_number))
 
-    def recover_failed_retries(self, poll_interval: int, batch_size: int | None = None) -> None:
-        self.recover_failed_retries_calls.append((poll_interval, batch_size))
+    def reconcile_stuck_tasks(self, *, stale_after_seconds: float, limit: int, head_block: int | None) -> int:
+        self.reconcile_calls.append(
+            {"stale_after_seconds": stale_after_seconds, "limit": limit, "head_block": head_block}
+        )
+        return 0
 
 
 class MockedSubtensor:

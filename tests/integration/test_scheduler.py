@@ -160,18 +160,18 @@ def test_backfill_retry_stays_on_backfill_queue():
 
 @pytest.mark.django_db
 def test_recovered_backfill_retry_stays_on_backfill_queue():
-    """The queue survives a scheduler restart: recovery rebuilds it from the database."""
+    """The queue survives a scheduler restart: the stuck-task sweep rebuilds it from the database."""
     current_block = 100
     registry_item, executable_path = _register_failing_task_submitted_to("block-backfill", current_block)
 
     task_attempt = TaskAttempt.objects.get(block_number=current_block, executable_path=executable_path)
     task_attempt.status = TaskAttempt.Status.FAILED
     task_attempt.attempt_count = 1
-    task_attempt.next_retry_at = timezone.now() - timedelta(minutes=5)
+    task_attempt.next_retry_at = timezone.now() - timedelta(hours=2)
     task_attempt.save()
 
     with patch.object(registry_item.function, "apply_async") as mock_apply_async:
-        block_processor_factory().recover_failed_retries(poll_interval=0)
+        block_processor_factory().reconcile_stuck_tasks(stale_after_seconds=1800, limit=10, head_block=None)
 
     task_attempt.refresh_from_db()
     mock_apply_async.assert_called_once_with(
@@ -270,41 +270,25 @@ def test_live_retry_is_unaffected_by_a_task_backfill_queue():
 
 
 @pytest.mark.django_db
-def test_retry_recover_mechanism():
-    """Test that scheduler recovers orphaned failed tasks ready for retry."""
+def test_stuck_attempts_are_recovered_in_bulk():
+    """PENDING rows whose message was lost and FAILED rows whose retry was never enqueued both run again."""
     batch_size = 30
     executable_path = abd_utils.get_executable_path(successful_task)
+    stale = timezone.now() - timedelta(hours=2)
 
-    past_time = timezone.now() - timedelta(days=1)
-
-    pending_attempts = TaskAttemptFactory.create_batch(
-        size=batch_size, is_pending=True, executable_path=executable_path, next_retry_at=past_time, attempt_count=1
+    lost_pending = TaskAttemptFactory.create_batch(size=batch_size, is_pending=True, executable_path=executable_path)
+    orphaned_failed = TaskAttemptFactory.create_batch(
+        size=batch_size, is_failed=True, executable_path=executable_path, next_retry_at=stale, attempt_count=1
     )
-    pending_attempt_ids = [attempt.id for attempt in pending_attempts]
-
-    failed_attempts = TaskAttemptFactory.create_batch(
-        size=batch_size, is_pending=True, executable_path=executable_path, next_retry_at=past_time, attempt_count=1
-    )
-    failed_attempt_ids = [attempt.id for attempt in failed_attempts]
-
-    TaskAttemptFactory.create_batch(
-        size=batch_size, is_success=True, executable_path=executable_path, next_retry_at=past_time, attempt_count=1
-    )
+    TaskAttempt.objects.update(updated_at=stale)
 
     block_task(successful_task)
 
-    task_registry.get_by_executable_path(executable_path)
+    recovered = block_processor_factory().reconcile_stuck_tasks(stale_after_seconds=1800, limit=100, head_block=None)
 
-    block_processor = block_processor_factory()
-    block_processor.recover_failed_retries(poll_interval=0)  # No delay for testing
-
-    recover_ids = pending_attempt_ids + failed_attempt_ids
-
-    qs = TaskAttempt.objects.filter(
-        id__in=recover_ids,
-        status=TaskAttempt.Status.SUCCESS,
-    )
-    assert qs.count() == len(recover_ids)
+    recover_ids = [attempt.id for attempt in lost_pending + orphaned_failed]
+    assert recovered == len(recover_ids)
+    assert TaskAttempt.objects.filter(id__in=recover_ids, status=TaskAttempt.Status.SUCCESS).count() == len(recover_ids)
 
 
 def test_bittensor_client_uses_archive_for_old_blocks(

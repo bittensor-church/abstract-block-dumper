@@ -42,6 +42,7 @@ BLOCK_LAG = None  # How far behind the chain head
 PENDING_TASKS = None  # Current pending tasks count
 REGISTERED_TASKS = None  # Number of registered task types
 ARCHIVE_NETWORK_USAGE = None  # Counter for archive network fallback
+TASKS_RECOVERED = None  # Counter for stuck attempts re-dispatched by the reconciliation sweep
 
 if PROMETHEUS_AVAILABLE:
     BLOCKS_PROCESSED = Counter(  # type: ignore
@@ -112,6 +113,11 @@ if PROMETHEUS_AVAILABLE:
     ARCHIVE_NETWORK_USAGE = Counter(  # type: ignore
         "block_dumper_archive_network_requests_total",
         "Total requests using archive network",
+    )
+    TASKS_RECOVERED = Counter(  # type: ignore
+        "block_dumper_tasks_recovered_total",
+        "Stuck task attempts re-dispatched by the reconciliation sweep",
+        ["task_name", "previous_status"],
     )
 
 
@@ -185,6 +191,12 @@ def record_task_retry(task_name: str) -> None:
     """Record a task retry attempt."""
     if PROMETHEUS_AVAILABLE and TASK_RETRIES is not None:
         TASK_RETRIES.labels(task_name=task_name).inc()
+
+
+def record_task_recovered(task_name: str, previous_status: str) -> None:
+    """Record a stuck task attempt re-dispatched by the reconciliation sweep."""
+    if PROMETHEUS_AVAILABLE and TASKS_RECOVERED is not None:
+        TASKS_RECOVERED.labels(task_name=task_name, previous_status=previous_status).inc()
 
 
 def observe_task_execution_time(task_name: str, duration: float) -> None:

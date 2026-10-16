@@ -34,8 +34,9 @@ class CeleryExecutor:
             return
 
         # Persist the routing so retries — including ones recovered from the database
-        # by a different process — can be re-dispatched to the same queue.
-        abd_dal.task_record_queue_override(task_attempt, queue)
+        # by a different process — can be re-dispatched to the same queue, and stamp
+        # the row as dispatched now.
+        abd_dal.task_record_dispatch(task_attempt, queue)
 
         task_kwargs = {
             "block_number": block_number,

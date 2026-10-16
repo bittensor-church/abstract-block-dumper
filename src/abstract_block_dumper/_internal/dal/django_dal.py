@@ -1,11 +1,11 @@
-from collections.abc import Collection, Iterator
+from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from django.conf import settings
-from django.db import transaction
-from django.db.models import Max, Min
+from django.db import OperationalError, transaction
+from django.db.models import Max, Min, Q
 from django.db.models.query import QuerySet
 from django.utils import timezone
 
@@ -18,6 +18,9 @@ DEFAULT_BLOCK_TASK_FAST_RETRY_DELAY_SECONDS = 5
 DEFAULT_BLOCK_TASK_RETRY_BACKOFF_START_SECONDS = 60
 DEFAULT_BLOCK_TASK_RETRY_BACKOFF_MULTIPLIER = 2
 MAX_RETRY_DELAY_MINUTES = 1440  # 24 hours max delay
+
+# SQLSTATE PostgreSQL raises when `SELECT ... FOR UPDATE NOWAIT` finds the row locked.
+PG_LOCK_NOT_AVAILABLE = "55P03"
 
 STAGED_RETRY_SETTINGS = (
     "BLOCK_TASK_FAST_RETRY_ATTEMPTS",
@@ -118,20 +121,6 @@ def _get_retry_delay_seconds(attempt_count: int) -> float:
     return min(policy.delay_seconds(attempt_count), max_delay_seconds)
 
 
-def get_ready_to_retry_attempts() -> Iterator[abd_models.TaskAttempt]:
-    return (
-        abd_models.TaskAttempt.objects.filter(
-            next_retry_at__isnull=False,
-            next_retry_at__lte=timezone.now(),
-            attempt_count__lt=abd_utils.get_max_attempt_limit(),
-        )
-        .exclude(
-            status=abd_models.TaskAttempt.Status.SUCCESS,
-        )
-        .iterator()
-    )
-
-
 def executed_block_numbers(executable_path: str, args_json: str, from_block: int, to_block: int) -> set[int]:
     block_numbers = (
         abd_models.TaskAttempt.objects.filter(
@@ -160,6 +149,45 @@ def inflight_block_numbers(executable_path: str, args_json: str, from_block: int
         .iterator()
     )
     return set(block_numbers)
+
+
+def _stuck_task_filter(stale_before: datetime) -> Q:
+    """
+    Attempts the database says should run but nothing is carrying.
+
+    PENDING/RUNNING: last dispatched (`updated_at`) before `stale_before`, and any retry
+    ETA (`next_retry_at`) also before it, so a retry still waiting for its ETA is left
+    alone. FAILED: the worker committed the failure but never enqueued the retry, which
+    it normally does right after the commit; `next_retry_at` is the moment that was due.
+    Exhausted attempts are never stuck.
+    """
+    status = abd_models.TaskAttempt.Status
+    in_flight = Q(status__in=[status.PENDING, status.RUNNING], updated_at__lt=stale_before) & (
+        Q(next_retry_at__isnull=True) | Q(next_retry_at__lt=stale_before)
+    )
+    orphaned_retry = Q(status=status.FAILED, next_retry_at__isnull=False, next_retry_at__lt=stale_before)
+    return (in_flight | orphaned_retry) & Q(attempt_count__lt=abd_utils.get_max_attempt_limit())
+
+
+def get_stuck_task_attempt_ids(stale_before: datetime, limit: int) -> list[int]:
+    """Ids of stuck attempts (see `_stuck_task_filter`), oldest `updated_at` first, at most `limit`."""
+    return list(
+        abd_models.TaskAttempt.objects.filter(_stuck_task_filter(stale_before))
+        .order_by("updated_at", "id")
+        .values_list("id", flat=True)[:limit]
+    )
+
+
+def is_stuck(task: abd_models.TaskAttempt, stale_before: datetime) -> bool:
+    """The `_stuck_task_filter` predicate evaluated on a loaded row, for re-checks under lock."""
+    status = abd_models.TaskAttempt.Status
+    if task.attempt_count >= abd_utils.get_max_attempt_limit():
+        return False
+    if task.status in (status.PENDING, status.RUNNING):
+        return task.updated_at < stale_before and (task.next_retry_at is None or task.next_retry_at < stale_before)
+    if task.status == status.FAILED:
+        return task.next_retry_at is not None and task.next_retry_at < stale_before
+    return False
 
 
 def reset_to_pending(task: abd_models.TaskAttempt) -> None:
@@ -220,10 +248,14 @@ def task_mark_as_failed(task: abd_models.TaskAttempt) -> None:
     task.save()
 
 
-def task_record_queue_override(task: abd_models.TaskAttempt, queue: str | None) -> None:
-    """Record the queue override a submission used, so its retries can reuse it."""
-    if task.celery_queue_override == queue:
-        return
+def task_record_dispatch(task: abd_models.TaskAttempt, queue: str | None) -> None:
+    """
+    Record that the task was just handed to Celery, and on which queue override.
+
+    Always touches `updated_at`, even when the queue is unchanged: on a PENDING row it
+    means "last dispatched at", which is what the stuck-task sweep measures staleness
+    against. The queue is kept so retries can be re-dispatched to the same place.
+    """
     task.celery_queue_override = queue
     task.save(update_fields=["celery_queue_override", "updated_at"])
 
@@ -233,6 +265,21 @@ def task_schedule_to_retry(task: abd_models.TaskAttempt, queue: str | None) -> N
     task.status = abd_models.TaskAttempt.Status.PENDING
     task.celery_queue_override = queue
     task.save()
+
+
+def is_lock_not_available(exc: OperationalError) -> bool:
+    """
+    True when `exc` wraps PostgreSQL's lock_not_available error (SQLSTATE 55P03).
+
+    Django re-raises the driver exception as `OperationalError` with the original as
+    `__cause__`; psycopg 3 exposes the code as `sqlstate`, psycopg2 as `pgcode`. Any other
+    `OperationalError` from a row lock - no code at all, or a connection-class code such as
+    08006 - is a connectivity failure, not contention. Backends without SQLSTATE (SQLite)
+    never report contention, which is right: they do not implement NOWAIT.
+    """
+    cause = exc.__cause__
+    code = getattr(cause, "sqlstate", None) or getattr(cause, "pgcode", None)
+    return code == PG_LOCK_NOT_AVAILABLE
 
 
 def task_create_or_get_pending(
