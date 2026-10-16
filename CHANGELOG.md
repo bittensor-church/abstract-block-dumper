@@ -9,6 +9,14 @@ upcoming release can be found in [changelog.d](changelog.d).
 
 <!-- towncrier release notes start -->
 
+## [0.1.12](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.12) - 2026-10-16
+
+### Fixed
+
+- A database connectivity error while a worker claims a task attempt is now logged as an error and propagated, instead of being reported at INFO as lock contention by another worker.
+- Task attempts left `PENDING`/`RUNNING` after a database, broker or worker failure, and `FAILED` attempts whose retry was never enqueued, are now re-dispatched automatically by the live scheduler (`block_tasks_v1`); previously they were skipped forever and could only be revived by running `backfill_blocks_v1` by hand. Configure with `BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS`, `BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS` and `BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE`.
+
+
 ## [0.1.11](https://github.com/bactensor/abstract-block-dumper/releases/tag/v0.1.11) - 2026-08-18
 
 - Added optional fast retries for failed tasks
