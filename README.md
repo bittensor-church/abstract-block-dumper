@@ -20,6 +20,10 @@ This means, the public API of this package is explicitly versioned, e.g. `abstra
 
 Internal packages, i.e. prefixed by `abstract_block_dumper._` do not share these guarantees and may change in a backwards-incompatible way at any time even in patch releases.
 
+Celery task names are derived from the decorated function's module and name, so renaming or
+moving a task function is a breaking change for your own deployment: queued messages and
+existing `TaskAttempt` rows no longer match it.
+
 ## Implementation Details
 
 ### General Workflow:
@@ -181,6 +185,24 @@ def process_multi_netuid_task(block_number: int, netuid: int):
 ```
 
 
+### Task function contract
+
+- `@block_task` and `@block_task()` are equivalent. The decorator returns the Celery task, so
+  `.delay()` / `.apply_async()` work for manual runs.
+- The function is called as `func(block_number=..., **args)`; the library passes the block
+  number, not block data, and the task reads what it needs from the chain.
+- `condition` receives the same keyword arguments. A non-callable `condition` raises
+  `TypeError` at import time; a condition that raises is logged and skips only that task and
+  args set for that block.
+- Each dict in `args` is a separate unit of work with its own `TaskAttempt`, status and retry
+  counter. Argument dicts must be JSON-serializable.
+- `celery_kwargs` apply both to the task declaration and to every submission; `args`,
+  `kwargs` and `eta` in it are ignored at submission because the library sets them.
+- A function that declares `**kwargs` also receives `_use_archive_network`, which is `True`
+  for blocks more than 300 behind the chain head.
+- The return value is stored in `TaskAttempt.execution_result`, so it must be
+  JSON-serializable.
+
 ## Backfilling Missed Blocks
 
 Two mechanisms process blocks the live scheduler did not handle in real time, and a third
@@ -334,6 +356,54 @@ Then start the Celery beat scheduler:
 ```bash
 celery -A your_project beat --loglevel=info
 ```
+
+## Execution guarantees
+
+- A database constraint keeps one `TaskAttempt` per block, task and args set. Submissions for
+  units already `SUCCESS` or `RUNNING` are dropped, and a worker runs only attempts that are
+  still `PENDING`, so duplicate broker deliveries are harmless.
+- Workers lock the attempt row while running it; a second worker finding it locked does not
+  run the function.
+- Failed attempts are retried with the backoff described under
+  [Staged retry settings](#staged-retry-settings) until `BLOCK_DUMPER_MAX_ATTEMPTS`, which
+  includes the first run. Retries wait with a Celery `eta` and stay on the queue of their
+  original submission.
+- Cleaning up `SUCCESS` rows makes those blocks look missing to `backfill_blocks_v1` and to
+  lookback fills, so choose the cleanup age with backfilling in mind.
+
+## Observability
+
+- **Metrics.** Install `abstract-block-dumper[prometheus]` to record Prometheus metrics;
+  without `prometheus_client` every metric call is a no-op. Series are prefixed
+  `block_dumper_`: `blocks_processed_total`, `tasks_submitted_total`, `current_block`,
+  `block_lag`, `block_processing_seconds`, `task_executions_total`,
+  `task_execution_seconds`, `task_retries_total`, `tasks_recovered_total`,
+  `registered_tasks`, `pending_tasks`, `archive_network_requests_total`,
+  `backfill_progress_percent`, `backfill_from_block` and `backfill_to_block`. Block metrics
+  carry `mode` (`realtime`/`backfill`) and `source` (`latest`/`finalized`) labels.
+  The package does not expose an HTTP endpoint; the scheduler and the backfill command are
+  separate processes and need their own scrape targets.
+- **Logs.** All logging goes through `structlog` with keyword context such as `block_number`,
+  `executable_path`, `celery_task_id`, `queue` and `duration`; log configuration belongs to
+  the host project.
+- **Admin.** `TaskAttempt` is browsable read-only in Django admin, filterable by status and
+  task and searchable by Celery task ID and block number.
+
+## Known limitations
+
+- The live scheduler processes only the head block on each poll. Blocks produced between
+  polls are covered only by `backfilling_lookback` or `backfill_blocks_v1`, and an old
+  integer `BLOCK_DUMPER_START_FROM_BLOCK` does not replay history.
+- Lookback windows are scanned inside the poll loop, so a large `backfilling_lookback` across
+  many tasks delays the next poll; queue isolation protects worker capacity, not scheduler
+  latency.
+- `backfill_blocks_v1 --network` defaults to `finney` and ignores `BITTENSOR_NETWORK`; pass
+  it explicitly on other networks.
+- Gap detection in `backfill_blocks_v1` is per block: a block where any task succeeded is not
+  reported as a gap. Per-task skipping still prevents duplicate work, but the gap summary
+  can understate what is missing.
+- The library's exceptions live in `abstract_block_dumper._internal` and have no stable
+  import path.
 
 ## Configuration
 
