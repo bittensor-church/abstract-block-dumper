@@ -2,15 +2,7 @@
 
 ## User Stories
 
-Before implementing features or changing behavior, read [USER_STORIES.md](USER_STORIES.md) and compare it with:
-
-- the current code paths you are about to touch
-- the new requirements from the user or issue
-- any tests that describe the same behavior
-
-If the code, requirements, and user stories disagree, resolve the behavior deliberately instead of preserving stale documentation. Update [USER_STORIES.md](USER_STORIES.md) in the same change whenever code behavior changes.
-
-If USER_STORIES.md doesn't exist or is empty, inform your handler that they need to add user stories to ensure documentation aligns with code.
+USER_STORIES.md exists only in projects that people use directly: a web app, admin panel, CLI or desktop app. A library like this one has none: README.md describes what the package does, how to install and use it, and its main flows. Do not add USER_STORIES.md for library changes; if the package gains direct users, such as a CLI people run, ask your handler whether to start one.
 
 ## General Workflow
 
