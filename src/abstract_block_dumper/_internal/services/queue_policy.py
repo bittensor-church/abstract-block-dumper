@@ -29,8 +29,8 @@ class Queue:
             queue, and the worker drops one it already prefetched. An attempt whose message
             expired is sent again once the TTL and the margin have passed, without using up
             an attempt.
-        throttle: Most attempts of this queue that may be in flight (sent and not finished)
-            while backfill and lookback submit more. `backfill_blocks_v1` waits for room;
+        throttle: Maximum number of attempts in flight (sent and not finished) on this queue
+            at which backfill and lookback stop submitting. `backfill_blocks_v1` waits for room;
             lookback leaves the rest for the next head. Live submissions never wait, but
             count, so on a queue shared with live work backfills get only what live leaves.
             Retries and the sweep's re-sends never wait either, and expired or lost attempts
