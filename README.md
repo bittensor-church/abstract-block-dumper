@@ -311,8 +311,7 @@ $ celery -A your_project worker -Q events-backfill --hostname=backfill@%h
 ### Database writes of a task
 
 The function runs in one transaction with the record of its outcome, so its database writes
-commit together with `SUCCESS`, or with `FAILED` when it raises. Writes inside a
-`transaction.atomic()` block are undone when an exception leaves that block.
+commit together with `SUCCESS`, or with `FAILED` when it raises.
 
 ### Checking the setup
 
