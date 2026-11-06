@@ -285,7 +285,7 @@ def record_chain_stats(block_number: int): ...
 | --- | --- |
 | `soft_time_limit`, `time_limit` | Celery time limits of every message sent to the queue, in seconds |
 | `message_ttl` | Seconds a message may wait in the queue; an expired message is sent again later |
-| `throttle` | Most attempts of the queue in flight while backfills submit more |
+| `throttle` | Maximum number of attempts in flight on the queue; once reached, backfills pause until there is room |
 | `retry` | `RetryPolicy`: `max_attempts` (default `3`), `give_up_after_blocks` and retry delays |
 
 > [!IMPORTANT]
