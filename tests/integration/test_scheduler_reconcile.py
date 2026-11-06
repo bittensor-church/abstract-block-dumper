@@ -1,9 +1,11 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
 from abstract_block_dumper._internal.dal.memory_registry import task_registry
 from abstract_block_dumper._internal.providers.bittensor_client import BittensorConnectionClient
+from abstract_block_dumper._internal.services.queue_monitor import QueueMonitor
+from abstract_block_dumper._internal.services.reconciler import QueueReconciler
 from abstract_block_dumper._internal.services.scheduler import TaskScheduler
 from abstract_block_dumper.v1.decorators import block_task
 from tests.conftest import MockedBlockProcessor
@@ -19,6 +21,8 @@ def _make_scheduler(
     stale_task_timeout: float | None = 1800,
     sweep_interval: float = 60,
     batch_size: int = 200,
+    queue_monitor: QueueMonitor | None = None,
+    queue_reconciler: QueueReconciler | None = None,
 ) -> tuple[TaskScheduler, MockedBlockProcessor]:
     """A scheduler over a mocked processor whose chain reads walk through `heads` (last value holds)."""
     remaining = list(heads or [101])
@@ -40,6 +44,8 @@ def _make_scheduler(
         stale_task_timeout=stale_task_timeout,
         stale_task_sweep_interval=sweep_interval,
         stale_task_batch_size=batch_size,
+        queue_monitor=queue_monitor,
+        queue_reconciler=queue_reconciler,
     )
     return scheduler, processor
 
@@ -107,9 +113,47 @@ def test_a_failing_sweep_does_not_stop_polling():
 
 
 @pytest.mark.django_db
-def test_sweep_is_disabled_when_the_timeout_is_none():
+def test_block_task_attempts_are_not_swept_without_a_timeout():
     scheduler, processor = _make_scheduler(stale_task_timeout=None)
 
     _run_ticks(scheduler, count=2, seconds_per_tick=120)
 
     assert processor.reconcile_calls == []
+
+
+def _queue_parts() -> tuple[MagicMock, MagicMock]:
+    monitor = MagicMock(spec=QueueMonitor)
+    reconciler = MagicMock(spec=QueueReconciler)
+    reconciler.reconcile.return_value = 0
+    return monitor, reconciler
+
+
+@pytest.mark.django_db
+def test_queue_checks_and_block_dumper_recovery_run_every_interval_without_a_timeout():
+    monitor, reconciler = _queue_parts()
+    scheduler, processor = _make_scheduler(
+        stale_task_timeout=None, sweep_interval=60, queue_monitor=monitor, queue_reconciler=reconciler
+    )
+
+    # Ticks at t=1000 (runs), t=1030 (inside the interval), t=1060 (runs again).
+    _run_ticks(scheduler, count=3, seconds_per_tick=30)
+
+    assert (monitor.check.call_count, reconciler.reconcile.call_args_list, processor.reconcile_calls) == (
+        2,
+        [call(stale_after_seconds=None, limit=200, head_block=None)] * 2,
+        [],
+    )
+
+
+@pytest.mark.django_db
+def test_a_failing_block_task_sweep_does_not_stop_block_dumper_recovery():
+    monitor, reconciler = _queue_parts()
+    scheduler, processor = _make_scheduler(queue_monitor=monitor, queue_reconciler=reconciler)
+    processor.reconcile_stuck_tasks = MagicMock(side_effect=RuntimeError("database down"))
+
+    _run_ticks(scheduler, count=1, seconds_per_tick=0)
+
+    assert (processor.reconcile_stuck_tasks.call_count, reconciler.reconcile.call_args_list) == (
+        1,
+        [call(stale_after_seconds=1800, limit=200, head_block=None)],
+    )

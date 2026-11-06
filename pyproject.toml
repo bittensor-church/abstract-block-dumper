@@ -163,12 +163,16 @@ django_settings_module = "tests.settings"
 
 [[tool.mypy.overrides]]
 module = [
+    "amqp",
+    "amqp.*",
     "bittensor",
     "bittensor.*",
     "celery",
     "celery.*",
     "cloudpickle",
     "cloudpickle.*",
+    "kombu",
+    "kombu.*",
     "nox",
     "prometheus_client",
     "prometheus_client.*",

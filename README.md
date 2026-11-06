@@ -60,6 +60,7 @@ Task attempts are stored in TaskAttempt model with retry logic and state trackin
 - Celery
 - Redis (for Celery broker and result backend)
 - PostgreSQL (recommended for production)
+- RabbitMQ as the broker, instead of Redis, to use [`BlockDumper`](#queue-policies-with-blockdumper)
 
 ## Installation
 
@@ -203,6 +204,437 @@ def process_multi_netuid_task(block_number: int, netuid: int):
 - The return value is stored in `TaskAttempt.execution_result`, so it must be
   JSON-serializable.
 
+## Queue policies with `BlockDumper`
+
+`BlockDumper` binds block tasks to queues that carry a policy, so the queue, its Celery
+settings and the library's recovery rules come from one object instead of being repeated in
+`celery_kwargs`, in Django settings and on the broker. The rules in this section apply to
+`BlockDumper` tasks only; tasks declared with `@block_task` keep working as described in the
+rest of this README.
+
+### Requirements
+
+- **RabbitMQ.** The queues rely on RabbitMQ's per-queue message TTL, its consumer counts and
+  its `consumer_timeout`. With any other broker, `block_tasks_v1`, `backfill_blocks_v1`,
+  `block_dumper_queues_v1` and workers stop with an error, and `manage.py check` reports
+  `abstract_block_dumper.W004`. `memory://` is accepted for tests (see
+  [Testing a project that uses `BlockDumper`](#testing-a-project-that-uses-blockdumper)).
+- **Celery's prefork pool** (the default). Recovery relies on the pool killing a task at its
+  hard time limit. The `threads`, `solo` and `eventlet` pools enforce no time limits, so on
+  them a task that outlasts its lease is retried while it still runs.
+- **Workers without `--time-limit` and `--soft-time-limit`.** Set limits on the queues, in
+  `celery_kwargs` or with `CELERY_TASK_TIME_LIMIT` and `CELERY_TASK_SOFT_TIME_LIMIT` (see
+  [Workers that die mid-task](#workers-that-die-mid-task)).
+- **The dumper is created next to the Celery app**, in the module Django imports at startup
+  (usually `your_project/celery.py`), so that `manage.py check` sees it. A dumper created in a
+  task module (`tasks.py` or `block_tasks.py`) works, but the checks miss it, and
+  `block_tasks_v1` and workers log a WARNING about it.
+
+### Declaring tasks
+
+```python
+# your_project/celery.py
+from celery import Celery
+from celery.signals import celeryd_init
+
+from abstract_block_dumper.v1.dumper import BlockDumper, Queue, RetryPolicy
+
+app = Celery("your_project")
+app.config_from_object("django.conf:settings", namespace="CELERY")
+app.autodiscover_tasks()
+
+dumper = BlockDumper(celery_app=app, block_time_seconds=12)
+
+EVENTS_LIVE = Queue(
+    "events-live",
+    soft_time_limit=100,
+    time_limit=120,
+    message_ttl=60,
+    retry=RetryPolicy(max_attempts=None, give_up_after_blocks=300),
+)
+EVENTS_BACKFILL = Queue(
+    "events-backfill",
+    soft_time_limit=100,
+    time_limit=120,
+    message_ttl=300,
+    throttle=600,
+    retry=RetryPolicy(max_attempts=None, give_up_after_blocks=7200),
+)
+# A rarely used task can keep live and backfill work on one queue.
+MAINTENANCE = Queue("maintenance", soft_time_limit=540, time_limit=600, message_ttl=900, throttle=20)
+
+
+@celeryd_init.connect
+def on_worker_init(**kwargs) -> None:
+    from abstract_block_dumper.v1.celery import setup_celery_tasks
+
+    setup_celery_tasks()
+```
+
+```python
+# your_app/block_tasks.py
+from your_project.celery import EVENTS_BACKFILL, EVENTS_LIVE, MAINTENANCE, dumper
+
+
+@dumper.block_task(live_queue=EVENTS_LIVE, backfill_queue=EVENTS_BACKFILL, backfilling_lookback=300)
+def index_events(block_number: int): ...
+
+
+@dumper.block_task(live_queue=MAINTENANCE, backfill_queue=MAINTENANCE, condition=lambda bn: bn % 100 == 0)
+def record_chain_stats(block_number: int): ...
+```
+
+`dumper.block_task` takes the same arguments as `@block_task` except `backfill_queue`, which
+is a `Queue` here, plus:
+
+- `live_queue` (required): submissions of new head blocks go to this queue.
+- `backfill_queue`: lookback and `backfill_blocks_v1` submissions go to this queue. It may be
+  the same object as `live_queue`; without it backfills use `live_queue`.
+  `backfilling_lookback` requires it.
+
+A manual `.delay()` of a `BlockDumper` task starts nothing for a block without a recorded
+attempt: the worker finds no `TaskAttempt` and raises `CeleryTaskLockedError`. To run the tasks
+of one block by hand, use
+`python manage.py backfill_blocks_v1 --from-block N --to-block N --no-gap-detection`. Without
+`--no-gap-detection` the command reports "No gaps found" as soon as any task succeeded for the
+block.
+
+Every message carries the policy of the queue it is sent to: its `soft_time_limit` and
+`time_limit` are passed to `apply_async` and override the same keys in `celery_kwargs`. A
+limit the queue does not set comes from `celery_kwargs` or Celery's own settings, never from
+another queue of the task; a hard limit found in neither is the
+[default hard limit](#workers-that-die-mid-task). Declaring a task raises `ValueError` when,
+on one of its queues or for messages without queue limits, its soft limit is not below its hard
+limit; the message names both limits and where each is set.
+
+`message_ttl` is how many seconds a message may wait before it is no longer worth running,
+counted from its send time or, for a retry, from its ETA. The message carries a Celery
+`expires`, so a worker discards it unexecuted even after prefetching it, and the queue is
+declared with `x-message-ttl`, so RabbitMQ drops it while it waits. The live scheduler then
+sends the attempt again, without using up an attempt (see
+[Expired messages](#expired-messages)). Choose a TTL longer than messages legitimately wait
+in the queue: workers count each discarded message in
+`block_dumper_messages_expired_total{queue}`, and a rising count means the TTL is too short.
+
+`throttle` caps how many attempts of the queue may be in flight (sent and not finished:
+waiting in the broker, prefetched by a worker, or running) while backfills submit more. The
+count comes from the database, so it needs no queue length limit on the broker.
+`backfill_blocks_v1` waits for room, checking every `BLOCK_DUMPER_THROTTLE_POLL_SECONDS`;
+lookback submits what fits and leaves the rest of its window for the next head. Live
+submissions never wait, but they count: on a queue shared by live and backfill work,
+backfills only get the room live work leaves. Lost attempts do not count, so they cannot hold
+the room until the sweep recovers them. Retries and the sweep's re-sends never wait for room,
+and expired or lost attempts stop counting, so once workers come back the attempts in flight
+can briefly exceed the throttle. The gauge `block_dumper_inflight_tasks{queue}`,
+refreshed on every reconciliation sweep and whenever a backfill or lookback reads the count,
+and the counter `block_dumper_throttled_total{queue,mode}` show the throttle at work.
+
+`retry` is the queue's `RetryPolicy`: when failed attempts are retried and when they are
+given up. An attempt is given up at the first limit it reaches:
+
+- `max_attempts` (default `3`, the first execution included);
+- `give_up_after_blocks`: once the block is about that many blocks behind the chain head.
+  This is **approximate**. When an attempt is first sent, the library turns the blocks left
+  into a deadline in time using `BlockDumper(block_time_seconds=...)` (default `12`), and
+  compares against that deadline from then on. A slower or stalled chain reaches the deadline
+  after fewer blocks, a faster one after more. A block that is already too old when it is
+  submitted, for example by a backfill, is given up without being sent.
+
+With both set to `None` an attempt is retried until it succeeds. The delay before each retry
+follows `fast_retry_attempts` (default `2`) retries of `fast_retry_delay` (default `5` s),
+then `backoff_start` (default `60` s) growing by `backoff_multiplier` (default `2`), capped at
+`max_delay` (default `1200` s). A retry waits for its ETA inside the worker without being
+acknowledged, so keep `max_delay` below RabbitMQ's `consumer_timeout` (30 minutes by default)
+or raise that timeout. The policy is shared by every task and role of the queue: on a queue
+serving live and backfill work, `give_up_after_blocks` also gives up backfills of older
+blocks.
+
+A given-up attempt is `FAILED` with `TaskAttempt.give_up_reason` set to `attempts`,
+`block_age` or `manual`. An attempt given up by a limit is logged at WARNING as "Task attempt
+given up" and counted in `block_dumper_tasks_given_up_total{task_name,reason}`. To stop an
+attempt that keeps failing, give it up by hand (see [Giving up attempts](#giving-up-attempts)).
+
+> [!WARNING]
+> Do not limit the queue length on the broker instead (`x-max-length` in RabbitMQ). With
+> `overflow=drop-head` or `reject-publish` RabbitMQ drops messages without telling the
+> sender, and the attempts wait for the stuck-task sweep.
+
+Retries and re-dispatched attempts keep the queue and policy of their original submission,
+recorded in `TaskAttempt.dispatch_queue`. Once that queue is no longer defined, for example
+after a rename for a new `message_ttl`, they go to the task's `backfill_queue`, or its
+`live_queue` without one, with a WARNING. Create one `BlockDumper` per Celery app; one queue
+name stands for one policy of one `BlockDumper`, so defining it twice with different
+settings, or in two `BlockDumper`s, raises `ValueError`.
+
+### Database writes of a task
+
+The function runs in one transaction with the record of its outcome, so its own database
+writes commit together with `SUCCESS`, or with `FAILED` when it raises. A task can store
+the part of its work that succeeded and raise to have the rest retried. The retry is sent
+once that transaction has committed, and the `transaction.on_commit()` callbacks the function
+registered run when it commits.
+
+To have writes undone when the function raises, wrap them in `transaction.atomic()`. When the
+exception leaves that block, Django rolls back to its savepoint and the rest of the
+transaction still commits:
+
+```python
+from django.db import transaction
+
+
+@dumper.block_task(live_queue=EVENTS_LIVE)
+def index_events(block_number: int) -> None:
+    store_events_available_now(block_number)  # kept when the task raises below
+    with transaction.atomic():
+        update_event_summary(block_number)  # undone if it raises
+    if events_missing(block_number):
+        raise EventsIncomplete(block_number)  # retried; the stored events stay
+```
+
+When the transaction cannot commit, none of the function's writes are kept: `FAILED` is
+recorded in a transaction of its own and the attempt is retried. That happens when the
+function leaves the transaction unusable, for example with a database error outside a
+savepoint (`transaction.get_rollback()` is true, or PostgreSQL reports "current transaction
+is aborted"), or when the commit itself fails, for example on a deferred foreign key. For a
+function that raised, the worker logs "Discarding database writes of a failed task attempt
+whose transaction could not commit" at WARNING.
+
+A worker whose attempt was taken over while the function ran commits nothing of the run (see
+[Workers that die mid-task](#workers-that-die-mid-task)).
+
+### Celery configuration
+
+The queues are added to the Celery app's queue table by `block_tasks_v1` and
+`backfill_blocks_v1` at startup, and in workers by `setup_celery_tasks()`. Workers must call
+it from `celeryd_init`, as in the example above: later signals such as `worker_ready` run
+after the worker has already declared its queues. Each queue is also declared on the broker
+once at startup, as the queue table holds it, and a queue that already exists there with
+other arguments or flags stops the command or the worker with an error that names the queue
+and explains what to do. A broker
+that is unreachable at that point does not stop a worker, where Celery keeps retrying the
+connection, nor `block_tasks_v1`, which logs a WARNING and starts without checking the
+queues on the broker. `backfill_blocks_v1` stops.
+
+- Any other process that sends BlockDumper tasks itself must call `setup_celery_tasks()`
+  once before sending. Otherwise Celery declares
+  the queue without its arguments, and RabbitMQ rejects the send once the queue has a
+  `message_ttl`.
+- A worker started without `-Q` consumes every queue in the table, so start live and backfill
+  workers with explicit `-Q` lists to keep their capacity apart.
+- The project's `task_routes` do not apply: block task messages always name their queue.
+- A queue the project already lists in `task_queues` under the same name is kept, as long as
+  RabbitMQ receives the same arguments for it as for the policy. Arguments Kombu derives from
+  `kombu.Queue` options count: `Queue("events-live", message_ttl=60)` matches a policy with
+  `message_ttl=60`, and `max_priority=10` adds `x-max-priority` the policy lacks. With
+  `task_queue_max_priority`, the `x-max-priority` Celery adds is part of both. Producers,
+  workers and the startup check then declare the project's queue, with its exchange and flags
+  such as `durable`.
+- Queue arguments cannot change on an existing RabbitMQ queue. A new `message_ttl` needs a
+  new queue name, or the old queue drained and deleted first. Attempts still waiting on the
+  old queue are re-sent to the task's current queue once they count as stuck.
+- The broker URL must use RabbitMQ: `amqp://`, `pyamqp://` or `amqps://`.
+
+### Checking the setup
+
+In a project whose `BlockDumper` exists once Django has loaded, `manage.py check` (also run
+by `migrate` and `runserver`) loads the block task modules and reports configurations that
+usually mean a mistake. All of them are warnings, so they never stop a command. Projects
+without a `BlockDumper` are not checked, and their task modules are not imported.
+
+| Id | Warning |
+| --- | --- |
+| `abstract_block_dumper.W000` | The queues could not be checked, e.g. a block task module failed to import |
+| `abstract_block_dumper.W001` | `CELERY_TASK_QUEUES` lists the queue with other arguments than its policy needs, counting those Kombu derives from options such as `max_priority` |
+| `abstract_block_dumper.W002` | A queue named as a `backfill_queue` also serves live submissions, without a `throttle` |
+| `abstract_block_dumper.W003` | A queue has a `throttle` but no backfill or lookback submissions go to it, so it has no effect |
+| `abstract_block_dumper.W004` | The Celery app of a `BlockDumper` uses a broker other than RabbitMQ |
+| `abstract_block_dumper.W005` | A queue has no `time_limit`, and some of its tasks run on the default hard limit |
+| `abstract_block_dumper.W006` | `RetryPolicy.max_delay` exceeds how long RabbitMQ keeps a message unacknowledged (`consumer_timeout`) |
+
+`block_dumper_queues_v1` lists every queue with its policy, the attempts in flight, the
+messages waiting on the broker and its consumers. A task without a `backfill_queue` gives its
+`live_queue` both roles, because its backfills go there:
+
+```bash
+$ python manage.py block_dumper_queues_v1
+QUEUE            ROLE           MESSAGE_TTL  SOFT/HARD  THROTTLE  IN_FLIGHT  WAITING  CONSUMERS
+events-live      live           60 s         100/120 s  -         4          4        2
+events-backfill  backfill       300 s        100/120 s  600       600        540      0  no consumers
+```
+
+`SOFT/HARD` shows the queue's own limits; `-` means the limit comes from the task, Celery's
+settings or the default hard limit. `IN_FLIGHT` also counts attempts whose message expired or
+that count as stuck, which the throttle no longer counts, so it can be higher than
+`block_dumper_inflight_tasks`.
+
+While it runs, the live scheduler checks the queues on every reconciliation sweep, also with
+`BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS = None`: it publishes
+`block_dumper_queue_messages{queue}`, `block_dumper_queue_consumers{queue}` and, for throttled
+queues, `block_dumper_inflight_tasks{queue}`, and logs "Block task queue has no consumers" at
+WARNING when a queue has attempts in flight but no worker reads it. It reads the queues of each
+Celery app over one broker connection.
+
+### Testing a project that uses `BlockDumper`
+
+`abstract_block_dumper.v1.testing` provides `MockBrokerContact`, a broker stand-in that
+records every call as a `BrokerCall` and reports the queue mismatches, queue stats or
+unreachable broker it is configured with. `use_broker_contact` makes the library use it for
+its Celery app inside a `with` block, whatever the broker URL:
+
+```python
+import pytest
+
+from abstract_block_dumper.v1.celery import setup_celery_tasks
+from abstract_block_dumper.v1.testing import MockBrokerContact, use_broker_contact
+from your_project.celery import app
+
+
+@pytest.fixture
+def broker():
+    with use_broker_contact(MockBrokerContact(app)) as contact:
+        yield contact
+
+
+def test_worker_refuses_a_queue_declared_with_other_arguments(broker):
+    broker.mismatches["events-live"] = "PRECONDITION_FAILED - inequivalent arg 'x-message-ttl'"
+
+    with pytest.raises(SystemExit):
+        setup_celery_tasks()
+```
+
+Without `use_broker_contact`, an app on `memory://` gets a fresh `MockBrokerContact` on every
+call.
+
+### Recovering attempts of `BlockDumper` tasks
+
+The live scheduler's reconciliation sweep (see
+[Recovering stuck task attempts](#3-recovering-stuck-task-attempts)) recovers the attempts of
+`BlockDumper` tasks by the rules below, apart from those of `@block_task` tasks and with a
+batch of its own, so one sweep handles up to twice `BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE`
+attempts. It recovers them also with `BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS = None`, except
+those that only their age shows to be lost (see
+[Without a stuck-task timeout](#without-a-stuck-task-timeout)).
+
+#### Workers that die mid-task
+
+A worker **claims** an attempt before running the function: in its own committed
+transaction it marks the row `RUNNING`, counts the attempt in `attempt_count`, and records a
+lease in `lease_expires_at`. The function then runs in a second transaction, which also
+records its outcome (see [Database writes of a task](#database-writes-of-a-task)).
+
+If the worker dies, the row stays `RUNNING` and the lease runs out. The sweep then marks it
+`FAILED` and retries it on the queue's `RetryPolicy`; once the attempt is given up it stays
+`FAILED` for good. A task that always exceeds its time limit therefore stops at
+`RetryPolicy.max_attempts`. Each expiry is logged at WARNING as "Task attempt lease expired"
+and counted in `block_dumper_task_lease_expired_total{task_name}`.
+
+The lease length is the task's hard time limit — the queue's `time_limit`, then `time_limit`
+in `celery_kwargs`, on a base class or the default hard limit, then Celery's
+`task_time_limit` — plus `BLOCK_DUMPER_RECOVERY_MARGIN_SECONDS`. Leases are written and
+checked on the database clock, so they hold even when the clocks of the worker and scheduler
+hosts disagree.
+
+A task with none of these limits gets a **default hard limit** when it is declared:
+`BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS`, or, if that is more, the highest soft limit of the
+task (on its queues without a `time_limit`, in `celery_kwargs`, on a base class, or Celery's
+`task_soft_time_limit`) plus the margin. Celery kills the task at that limit, before the sweep
+would take the attempt over.
+
+> [!IMPORTANT]
+> Give block tasks a hard time limit, ideally with a `soft_time_limit` a few seconds below it:
+> `Queue(time_limit=120, soft_time_limit=100)`. The soft limit raises
+> `SoftTimeLimitExceeded` inside the task, which is recorded as an ordinary failure and
+> retried. A task that needs longer than the default hard limit is killed on every attempt and
+> given up at its attempt limit.
+
+> [!WARNING]
+> - Do not start `BlockDumper` workers with `--time-limit` or `--soft-time-limit`; use
+>   `CELERY_TASK_TIME_LIMIT` and `CELERY_TASK_SOFT_TIME_LIMIT` instead. Neither the
+>   declaration nor the lease sees the command line, and the prefork pool on RabbitMQ kills a
+>   task at the later of its two limits, so a `--soft-time-limit` above the hard limit makes
+>   the sweep retry the task while it still runs.
+> - `celery_kwargs={"time_limit": None}` removes the default hard limit; the lease is then
+>   `BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS` (no lease at all when that is `None`), and a task
+>   that outlasts it is retried while still running. The first run then cannot record its
+>   outcome and its own database writes roll back, but anything it did outside the database
+>   happens twice.
+
+A worker whose attempt was taken over this way cannot overwrite the newer attempt: every
+write after the claim checks that the row still carries the worker's own Celery task id
+(`celery_task_id`).
+
+#### Expired messages
+
+A `PENDING` attempt on a queue with a `message_ttl` is sent again once its message has
+expired: `dispatched_at` (database clock) is older than the TTL plus
+`BLOCK_DUMPER_RECOVERY_MARGIN_SECONDS`, and so is the ETA of a retry. The re-send keeps the
+attempt count, is logged at WARNING as "Re-dispatched task attempt whose message expired",
+and is counted in `block_dumper_tasks_recovered_total` with `previous_status="pending"`.
+
+#### Lost messages and lost retries
+
+An attempt without a lease or message TTL counts as stuck by the rules of
+[Recovering stuck task attempts](#3-recovering-stuck-task-attempts), with two differences: a
+`RUNNING` attempt with a lease is never stuck, since its lease says when its worker is gone,
+and an attempt stays recoverable while its `RetryPolicy` allows another try rather than below
+`BLOCK_DUMPER_MAX_ATTEMPTS`. A stuck attempt is re-dispatched under its recorded policy,
+without consuming an attempt; a duplicate message finds the attempt already running or
+finished.
+
+#### Without a stuck-task timeout
+
+With `BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS = None` the sweep still runs every
+`BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS`: it checks the queues, recovers expired
+leases and re-sends expired messages. There is no default hard limit and no recovery by age,
+so:
+
+- A task without a hard limit has no lease. If its worker dies, the attempt stays `RUNNING`
+  for good, counts against the queue's `throttle`, and cannot be given up by hand.
+- A lost `PENDING` attempt on a queue without `message_ttl` is not sent again until a
+  `backfill_blocks_v1` run covers its block, and holds a `throttle` slot until then.
+- A `FAILED` attempt whose retry was never sent waits for the next submission of its block.
+
+Give every queue a `time_limit` and a `message_ttl` to keep these attempts recoverable.
+
+### Giving up attempts
+
+`block_dumper_give_up_v1` stops the retries of one `BlockDumper` task, for example after a
+bug makes it fail for every block. `PENDING` and `FAILED` attempts that could still run become
+`FAILED` with `give_up_reason="manual"`; `RUNNING`, finished and already given-up attempts are
+left alone. The command refuses tasks declared with `@block_task`.
+
+```bash
+# Preview, then give up the attempts of blocks 100-200
+$ python manage.py block_dumper_give_up_v1 --task index_events --from-block 100 --to-block 200 --dry-run
+$ python manage.py block_dumper_give_up_v1 --task index_events --from-block 100 --to-block 200
+```
+
+`--task` takes the task's executable path (`module.function`) or, when it is unique, the
+function name. Without `--from-block`/`--to-block` every block of the task is covered.
+
+Each run that stops any attempts logs one WARNING, "Task attempts given up by hand", with their
+number. These attempts are not counted in `block_dumper_tasks_given_up_total`: the command is a
+one-off process, whose metrics nothing scrapes.
+
+### Other differences from `@block_task`
+
+- `attempt_count` counts executions started rather than failures.
+- `celery_task_id` holds the id of the Celery message that ran the attempt.
+- A message delivered again for an attempt that is still `RUNNING`, for example with
+  `acks_late` after a worker died, raises `CeleryTaskLockedError`; the attempt is recovered
+  once its lease passes.
+- A retry keeps the archive-network hint of the failed message, and moves to the archive
+  network once more than ~300 blocks were produced since the attempt was created.
+- `backfill_blocks_v1` reads the chain head again at most once a minute, so the
+  archive-network choice holds through a long, throttled backfill.
+- `block_dumper_archive_network_requests_total` and the number of blocks lookback reports as
+  submitted count only messages actually sent.
+- An attempt that was given up is never reopened, not by a new submission nor by a higher
+  limit.
+- `post_save` and `pre_save` on `TaskAttempt` fire when an attempt is created and when the
+  sweep re-dispatches a stuck one; every other status change is a conditional update that
+  fires neither.
+
 ## Backfilling Missed Blocks
 
 Two mechanisms process blocks the live scheduler did not handle in real time, and a third
@@ -295,13 +727,16 @@ Each recovery is logged at WARNING and counted in the
 `block_dumper_tasks_recovered_total{task_name,previous_status}` Prometheus counter. Tune the
 timeout to exceed the longest time a message can legitimately wait in a queue plus execute —
 deep backfills on a small worker pool may need a larger value — or set it to `None` to
-disable the sweep. See `BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS` and
+stop this recovery of `@block_task` attempts. See `BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS` and
 `BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE` in the
 [Configuration Options Reference](#configuration-options-reference).
 
 For protection at the Celery level as well — for example to keep a message on the broker
 while a worker's database connection is down — pass the usual Celery options through
 `celery_kwargs`, e.g. `celery_kwargs={"acks_late": True}`.
+
+Attempts of `BlockDumper` tasks follow their own rules: see
+[Recovering attempts of `BlockDumper` tasks](#recovering-attempts-of-blockdumper-tasks).
 
 
 ## Maintenance Tasks
@@ -370,6 +805,8 @@ celery -A your_project beat --loglevel=info
   original submission.
 - Cleaning up `SUCCESS` rows makes those blocks look missing to `backfill_blocks_v1` and to
   lookback fills, so choose the cleanup age with backfilling in mind.
+- `BlockDumper` tasks claim attempts with a lease and retry by their queue's `RetryPolicy`
+  instead; see [Queue policies with `BlockDumper`](#queue-policies-with-blockdumper).
 
 ## Observability
 
@@ -381,13 +818,19 @@ celery -A your_project beat --loglevel=info
   `registered_tasks`, `pending_tasks`, `archive_network_requests_total`,
   `backfill_progress_percent`, `backfill_from_block` and `backfill_to_block`. Block metrics
   carry `mode` (`realtime`/`backfill`) and `source` (`latest`/`finalized`) labels.
+  `BlockDumper` tasks add `task_lease_expired_total`, `messages_expired_total`,
+  `tasks_given_up_total`, `inflight_tasks`, `queue_messages`, `queue_consumers` and
+  `throttled_total`, described in
+  [Queue policies with `BlockDumper`](#queue-policies-with-blockdumper).
   The package does not expose an HTTP endpoint; the scheduler and the backfill command are
   separate processes and need their own scrape targets.
 - **Logs.** All logging goes through `structlog` with keyword context such as `block_number`,
   `executable_path`, `celery_task_id`, `queue` and `duration`; log configuration belongs to
   the host project.
 - **Admin.** `TaskAttempt` is browsable read-only in Django admin, filterable by status and
-  task and searchable by Celery task ID and block number.
+  task and searchable by Celery task ID and block number. When a `BlockDumper` exists, it
+  also shows the `BlockDumper` columns `dispatch_queue`, `dispatched_at`, `lease_expires_at`,
+  `give_up_at` and `give_up_reason`, with filters on `give_up_reason` and `dispatch_queue`.
 
 ## Known limitations
 
@@ -506,20 +949,20 @@ BLOCK_DUMPER_LOOKBACK_ENABLED = True
 ### `BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS`
 - **Type:** `int | float | None`
 - **Default:** `1800` (30 minutes)
-- **Description:** How long a task attempt may sit without progress before the live scheduler's reconciliation sweep treats it as stuck and re-dispatches it (see [Recovering stuck task attempts](#3-recovering-stuck-task-attempts)). Must exceed the longest time a message can legitimately wait in a queue plus execute. `None` disables the sweep.
+- **Description:** How long a task attempt may sit without progress before the live scheduler's reconciliation sweep treats it as stuck and re-dispatches it (see [Recovering stuck task attempts](#3-recovering-stuck-task-attempts)). Must exceed the longest time a message can legitimately wait in a queue plus execute. `None` disables the sweep of `@block_task` attempts; for `BlockDumper` tasks it turns off the default hard limit and recovery by age, while expired leases and expired messages are still recovered (see [Without a stuck-task timeout](#without-a-stuck-task-timeout)). For `BlockDumper` tasks it is also the default hard time limit and the lease of a task without one (see [Workers that die mid-task](#workers-that-die-mid-task)); it is read when such a task is declared, so a change needs a restart.
 
 ```python
 BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS = 3600  # one hour
 ```
 
-> **Performance Impact:** Too low a value re-dispatches slow-but-healthy messages; duplicates are harmless for correctness but waste worker slots.
+> **Performance Impact:** Too low a value re-dispatches slow-but-healthy messages; duplicates are harmless for correctness but waste worker slots. It also kills `BlockDumper` tasks on the default hard limit that need longer, so they never finish. A `BlockDumper` task declared with `celery_kwargs={"time_limit": None}` has this timeout as its lease, so too low a value retries its long runs while they still run.
 
 ---
 
 ### `BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS`
 - **Type:** `int | float`
 - **Default:** `60`
-- **Description:** Minimum seconds between two reconciliation sweeps in the live scheduler.
+- **Description:** Minimum seconds between two reconciliation sweeps in the live scheduler. It also paces the checks of `BlockDumper` queues and the recovery of expired leases and expired messages, which run also with `BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS = None`.
 
 ```python
 BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS = 120
@@ -530,11 +973,35 @@ BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS = 120
 ### `BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE`
 - **Type:** `int`
 - **Default:** `200`
-- **Description:** Maximum number of stuck attempts re-dispatched per sweep. After a long outage the backlog drains over several sweeps instead of flooding the broker at once.
+- **Description:** Maximum number of stuck attempts re-dispatched per sweep. After a long outage the backlog drains over several sweeps instead of flooding the broker at once. Attempts of `@block_task` and of `BlockDumper` tasks each get a batch of this size.
 
 ```python
 BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE = 500
 ```
+
+---
+
+### `BLOCK_DUMPER_RECOVERY_MARGIN_SECONDS`
+- **Type:** `int | float`
+- **Default:** `10`
+- **Description:** `BlockDumper` tasks only. Added to a task's hard time limit to get the lease of a claimed attempt (see [Workers that die mid-task](#workers-that-die-mid-task)). It covers the delay between the worker killing the task and the sweep seeing the lease expire; the database clock is used on both sides, so host clock drift does not need to be covered. It is also the gap the default hard limit keeps above a soft limit, which is the task's cleanup time after `SoftTimeLimitExceeded`; at `0` there is none, so declaring a task whose soft limit reaches `BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS` without a hard limit of its own raises `ValueError`. Must be non-negative.
+
+```python
+BLOCK_DUMPER_RECOVERY_MARGIN_SECONDS = 30
+```
+
+---
+
+### `BLOCK_DUMPER_THROTTLE_POLL_SECONDS`
+- **Type:** `int | float`
+- **Default:** `1`
+- **Description:** `BlockDumper` tasks only. How often `backfill_blocks_v1` checks the database for room while a queue's `throttle` is full (see [Queue policies](#queue-policies-with-blockdumper)). Must be positive; with a throttled queue an invalid value stops the commands and workers at startup.
+
+```python
+BLOCK_DUMPER_THROTTLE_POLL_SECONDS = 5
+```
+
+> **Performance Impact:** Each check is one `COUNT` query on the `TaskAttempt` table.
 
 ---
 
@@ -684,6 +1151,13 @@ Ideally, you should run `nox -t format lint` before every commit to ensure that 
 Before submitting a PR, make sure that tests pass as well, you can do so using:
 ```
 nox -t check # equivalent to `nox -t format lint test`
+```
+
+The RabbitMQ contact tests (`tests/contacts`) are skipped unless `BLOCK_DUMPER_TEST_RABBITMQ_URL`
+points at a running broker. Start the one from `docker-compose.yml` and run the tests against it:
+```
+docker compose up -d --wait
+BLOCK_DUMPER_TEST_RABBITMQ_URL=amqp://guest:guest@localhost:5672// nox -t check
 ```
 
 If you wish to install dependencies into `.venv` so your IDE can pick them up, you can do so using:

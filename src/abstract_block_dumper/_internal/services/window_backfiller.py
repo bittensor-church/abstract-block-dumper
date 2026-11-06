@@ -4,6 +4,7 @@ Shared window-backfilling logic used by both the live and backfill schedulers.
 Given a registry item and a block, decide whether to submit it (skipping blocks
 already executed and blocks whose condition does not match) and choose the
 archive-network flag based on the block's distance from the chain head.
+`process_item_range` hands the tasks of a `BlockDumper` to `QueueBackfiller`.
 """
 
 from typing import Any
@@ -12,14 +13,14 @@ import structlog
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem
+from abstract_block_dumper._internal.services.archive_network import ARCHIVE_BLOCK_THRESHOLD
 from abstract_block_dumper._internal.services.executor import CeleryExecutor
 from abstract_block_dumper._internal.services.metrics import increment_archive_network_usage
+from abstract_block_dumper._internal.services.queue_backfiller import QueueBackfiller
+from abstract_block_dumper._internal.services.queue_executor import QueueExecutor
 from abstract_block_dumper._internal.services.utils import serialize_args
 
 logger = structlog.get_logger(__name__)
-
-# Blocks older than this threshold from the current head require the archive network.
-ARCHIVE_BLOCK_THRESHOLD = 300
 
 
 class WindowBackfiller:
@@ -28,6 +29,7 @@ class WindowBackfiller:
     def __init__(self, executor: CeleryExecutor, archive_threshold: int = ARCHIVE_BLOCK_THRESHOLD) -> None:
         self.executor = executor
         self.archive_threshold = archive_threshold
+        self.queue_backfiller = QueueBackfiller(QueueExecutor(), archive_threshold)
 
     def submit_block(
         self,
@@ -75,6 +77,8 @@ class WindowBackfiller:
         in-flight (PENDING/RUNNING) blocks and skips both, submitting each
         remaining condition-matching block. Returns the number submitted.
         """
+        if registry_item.live_queue is not None:
+            return self.queue_backfiller.process_item_range(registry_item, from_block, to_block, head_block)
         submitted = 0
         for args in registry_item.get_execution_args():
             args_json = serialize_args(args)

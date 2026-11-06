@@ -11,6 +11,7 @@ from abstract_block_dumper._internal.dal.memory_registry import BaseRegistry, Re
 from abstract_block_dumper._internal.exceptions import ConditionEvaluationError
 from abstract_block_dumper._internal.services.executor import CeleryExecutor
 from abstract_block_dumper._internal.services.metrics import increment_archive_network_usage, record_task_recovered
+from abstract_block_dumper._internal.services.queue_executor import QueueExecutor
 from abstract_block_dumper._internal.services.window_backfiller import ARCHIVE_BLOCK_THRESHOLD
 from abstract_block_dumper.models import TaskAttempt
 
@@ -37,7 +38,7 @@ class BaseBlockProcessor(Protocol):
         ...
 
     def reconcile_stuck_tasks(self, *, stale_after_seconds: float, limit: int, head_block: int | None) -> int:
-        """Re-dispatch attempts the database says should run but nothing is carrying."""
+        """Re-dispatch `@block_task` attempts the database says should run but nothing is carrying."""
         ...
 
 
@@ -45,6 +46,7 @@ class BlockProcessor:
     def __init__(self, executor: CeleryExecutor, registry: BaseRegistry) -> None:
         self.executor = executor
         self.registry = registry
+        self.queue_executor = QueueExecutor()
         self._cleanup_phantom_tasks()
 
     def process_block(
@@ -68,7 +70,11 @@ class BlockProcessor:
     def process_registry_item(self, registry_item: RegistryItem, block_number: int) -> None:
         for args in registry_item.get_execution_args():
             try:
-                if registry_item.match_condition(block_number, **args):
+                if not registry_item.match_condition(block_number, **args):
+                    continue
+                if registry_item.live_queue is not None:
+                    self.queue_executor.execute(registry_item, block_number, args, head_block=block_number)
+                else:
                     self.executor.execute(registry_item, block_number, args)
             except ConditionEvaluationError as e:
                 logger.warning(
@@ -89,7 +95,8 @@ class BlockProcessor:
         never enqueued. See `abd_dal.get_stuck_task_attempt_ids` for the exact predicate.
         Each row is claimed under its row lock, so an attempt a worker is executing right
         now is skipped, and handed back to the executor on the queue it was originally
-        submitted to. A re-dispatch does not count as an attempt.
+        submitted to. A re-dispatch does not count as an attempt. Attempts of `BlockDumper`
+        tasks are left out; `QueueReconciler` recovers them.
 
         Args:
             stale_after_seconds: How long an attempt may sit without progress before it
@@ -103,8 +110,9 @@ class BlockProcessor:
 
         """
         stale_before = timezone.now() - timedelta(seconds=stale_after_seconds)
+        dumper_paths = [item.executable_path for item in self.registry.get_functions() if item.live_queue is not None]
         recovered = 0
-        for task_id in abd_dal.get_stuck_task_attempt_ids(stale_before, limit):
+        for task_id in abd_dal.get_stuck_task_attempt_ids(stale_before, limit, exclude_paths=dumper_paths):
             try:
                 if self._reconcile_stuck_task(task_id, stale_before, head_block):
                     recovered += 1

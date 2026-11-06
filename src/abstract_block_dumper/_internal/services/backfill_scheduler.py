@@ -24,6 +24,9 @@ from abstract_block_dumper._internal.services.metrics import (
     set_block_lag,
     set_current_block,
 )
+from abstract_block_dumper._internal.services.queue_backfiller import QueueBackfiller
+from abstract_block_dumper._internal.services.queue_executor import QueueExecutor
+from abstract_block_dumper._internal.services.throttle import ThrottleGate
 from abstract_block_dumper._internal.services.utils import serialize_args
 from abstract_block_dumper._internal.services.window_backfiller import (
     ARCHIVE_BLOCK_THRESHOLD,
@@ -41,6 +44,9 @@ ARCHIVE_NETWORK = "archive"
 
 # Memory cleanup interval (every N blocks)
 MEMORY_CLEANUP_INTERVAL = 1000
+
+# How old the chain head a running backfill measures BlockDumper blocks against may get.
+HEAD_REFRESH_SECONDS = 60
 
 
 @dataclass
@@ -79,6 +85,8 @@ class BackfillScheduler:
         """
         self.block_processor = block_processor
         self.window_backfiller = WindowBackfiller(block_processor.executor)
+        self.queue_backfiller = QueueBackfiller(QueueExecutor())
+        self.throttle_gate = ThrottleGate(wait=True, should_continue=lambda: self.is_running)
         self.network = network
         self.from_block = from_block
         self.to_block = to_block
@@ -87,6 +95,9 @@ class BackfillScheduler:
         self.is_running = False
         self._subtensor: bt.Subtensor | None = None
         self._current_head_cache: int | None = None
+        # BlockDumper blocks are measured against a head refreshed while the backfill runs.
+        self._dumper_head_cache: int | None = None
+        self._dumper_head_read_at: float | None = None
 
     @property
     def subtensor(self) -> bt.Subtensor:
@@ -103,6 +114,28 @@ class BackfillScheduler:
         blocks_behind = self._current_head_cache - block_number
         return ARCHIVE_NETWORK if blocks_behind > ARCHIVE_BLOCK_THRESHOLD else self.network
 
+    def _latest_dumper_head(self, block_number: int) -> int:
+        """
+        The chain head to measure a `BlockDumper` block against, read at most every `HEAD_REFRESH_SECONDS`.
+
+        Waiting for room in a throttled queue can stretch a backfill over hours, far enough for
+        the head to move a block past the archive threshold. A failed read keeps the last known
+        head and is not repeated until the next refresh. With no head known at all, the block
+        itself stands in, which makes its distance 0: never archive.
+        """
+        now = time.monotonic()
+        if self._dumper_head_read_at is None or now - self._dumper_head_read_at >= HEAD_REFRESH_SECONDS:
+            self._dumper_head_read_at = now
+            try:
+                self._dumper_head_cache = self.subtensor.block
+            except Exception:
+                logger.warning(
+                    "Failed to read the chain head; using the last known head",
+                    last_known_head=self._dumper_head_cache,
+                    exc_info=True,
+                )
+        return self._dumper_head_cache if self._dumper_head_cache is not None else block_number
+
     def start(self) -> DryRunStats | None:
         """
         Start processing blocks from from_block to to_block.
@@ -115,6 +148,8 @@ class BackfillScheduler:
 
         # Refresh current head for accurate archive network decisions
         self._current_head_cache = self.subtensor.block
+        self._dumper_head_cache = self._current_head_cache
+        self._dumper_head_read_at = time.monotonic()
 
         total_blocks = self.to_block - self.from_block + 1
         network_type = self._get_network_type_for_block(self.from_block)
@@ -346,13 +381,23 @@ class BackfillScheduler:
             executed_blocks = executed_blocks_cache.get(cache_key, set())
 
             try:
-                self.window_backfiller.submit_block(
-                    registry_item,
-                    block_number,
-                    args,
-                    executed_blocks,
-                    head_block=head_block,
-                )
+                if registry_item.live_queue is not None:
+                    self.queue_backfiller.submit_block(
+                        registry_item,
+                        block_number,
+                        args,
+                        executed_blocks,
+                        head_block=lambda: self._latest_dumper_head(block_number),
+                        gate=self.throttle_gate,
+                    )
+                else:
+                    self.window_backfiller.submit_block(
+                        registry_item,
+                        block_number,
+                        args,
+                        executed_blocks,
+                        head_block=head_block,
+                    )
             except Exception:
                 logger.exception(
                     "Error during backfill task execution",

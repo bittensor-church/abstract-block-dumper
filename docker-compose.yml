@@ -1,0 +1,12 @@
+# Services the tests need; start them with `docker compose up -d --wait` before running the tests.
+services:
+  # The broker of tests/contacts, which are skipped unless BLOCK_DUMPER_TEST_RABBITMQ_URL points at it.
+  rabbitmq:
+    image: rabbitmq:3.13-alpine
+    ports:
+      - "5672:5672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

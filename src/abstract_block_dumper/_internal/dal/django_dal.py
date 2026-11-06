@@ -169,10 +169,16 @@ def _stuck_task_filter(stale_before: datetime) -> Q:
     return (in_flight | orphaned_retry) & Q(attempt_count__lt=abd_utils.get_max_attempt_limit())
 
 
-def get_stuck_task_attempt_ids(stale_before: datetime, limit: int) -> list[int]:
-    """Ids of stuck attempts (see `_stuck_task_filter`), oldest `updated_at` first, at most `limit`."""
+def get_stuck_task_attempt_ids(stale_before: datetime, limit: int, exclude_paths: Collection[str] = ()) -> list[int]:
+    """
+    Ids of stuck attempts (see `_stuck_task_filter`), oldest `updated_at` first, at most `limit`.
+
+    Attempts of the tasks in `exclude_paths` are left out; those are `BlockDumper` tasks,
+    which `queue_attempts` recovers by their own rules.
+    """
     return list(
         abd_models.TaskAttempt.objects.filter(_stuck_task_filter(stale_before))
+        .exclude(executable_path__in=exclude_paths)
         .order_by("updated_at", "id")
         .values_list("id", flat=True)[:limit]
     )

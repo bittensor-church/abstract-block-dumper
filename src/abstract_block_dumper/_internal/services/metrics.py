@@ -43,6 +43,13 @@ PENDING_TASKS = None  # Current pending tasks count
 REGISTERED_TASKS = None  # Number of registered task types
 ARCHIVE_NETWORK_USAGE = None  # Counter for archive network fallback
 TASKS_RECOVERED = None  # Counter for stuck attempts re-dispatched by the reconciliation sweep
+TASK_LEASES_EXPIRED = None  # Counter for claimed attempts whose worker died or timed out
+MESSAGES_EXPIRED = None  # Counter for block task messages a worker discarded past their TTL
+INFLIGHT_TASKS = None  # Attempts of a throttled queue sent and not finished
+QUEUE_MESSAGES = None  # Messages waiting in a BlockDumper queue on the broker
+QUEUE_CONSUMERS = None  # Consumers of a BlockDumper queue, where the broker reports them
+TASKS_GIVEN_UP = None  # Attempts that will not be retried again
+THROTTLED = None  # Backfill or lookback submissions held back by a queue's throttle
 
 if PROMETHEUS_AVAILABLE:
     BLOCKS_PROCESSED = Counter(  # type: ignore
@@ -118,6 +125,41 @@ if PROMETHEUS_AVAILABLE:
         "block_dumper_tasks_recovered_total",
         "Stuck task attempts re-dispatched by the reconciliation sweep",
         ["task_name", "previous_status"],
+    )
+    TASK_LEASES_EXPIRED = Counter(  # type: ignore
+        "block_dumper_task_lease_expired_total",
+        "Claimed task attempts whose lease passed before the worker recorded a result",
+        ["task_name"],
+    )
+    TASKS_GIVEN_UP = Counter(  # type: ignore
+        "block_dumper_tasks_given_up_total",
+        "Task attempts given up for good: no attempts left, block too old, or by hand",
+        ["task_name", "reason"],
+    )
+    QUEUE_MESSAGES = Gauge(  # type: ignore
+        "block_dumper_queue_messages",
+        "Messages waiting in a BlockDumper queue on the broker",
+        ["queue"],
+    )
+    QUEUE_CONSUMERS = Gauge(  # type: ignore
+        "block_dumper_queue_consumers",
+        "Consumers of a BlockDumper queue",
+        ["queue"],
+    )
+    INFLIGHT_TASKS = Gauge(  # type: ignore
+        "block_dumper_inflight_tasks",
+        "Attempts of a throttled queue that were sent and have not finished",
+        ["queue"],
+    )
+    THROTTLED = Counter(  # type: ignore
+        "block_dumper_throttled_total",
+        "Backfill (waits) and lookback (skipped blocks) submissions held back by a queue throttle",
+        ["queue", "mode"],
+    )
+    MESSAGES_EXPIRED = Counter(  # type: ignore
+        "block_dumper_messages_expired_total",
+        "Block task messages a worker discarded unexecuted because their message TTL passed",
+        ["queue"],
     )
 
 
@@ -197,6 +239,48 @@ def record_task_recovered(task_name: str, previous_status: str) -> None:
     """Record a stuck task attempt re-dispatched by the reconciliation sweep."""
     if PROMETHEUS_AVAILABLE and TASKS_RECOVERED is not None:
         TASKS_RECOVERED.labels(task_name=task_name, previous_status=previous_status).inc()
+
+
+def record_task_lease_expired(task_name: str) -> None:
+    """Record a claimed attempt found RUNNING after its lease passed."""
+    if PROMETHEUS_AVAILABLE and TASK_LEASES_EXPIRED is not None:
+        TASK_LEASES_EXPIRED.labels(task_name=task_name).inc()
+
+
+def record_task_given_up(task_name: str, reason: str) -> None:
+    """Record an attempt that will not be retried again."""
+    if PROMETHEUS_AVAILABLE and TASKS_GIVEN_UP is not None:
+        TASKS_GIVEN_UP.labels(task_name=task_name, reason=reason).inc()
+
+
+def set_queue_messages(queue: str, count: int) -> None:
+    """Set how many messages wait in a BlockDumper queue."""
+    if PROMETHEUS_AVAILABLE and QUEUE_MESSAGES is not None:
+        QUEUE_MESSAGES.labels(queue=queue).set(count)
+
+
+def set_queue_consumers(queue: str, count: int) -> None:
+    """Set how many consumers read a BlockDumper queue."""
+    if PROMETHEUS_AVAILABLE and QUEUE_CONSUMERS is not None:
+        QUEUE_CONSUMERS.labels(queue=queue).set(count)
+
+
+def set_inflight_tasks(queue: str, count: int) -> None:
+    """Set how many attempts of a throttled queue are in flight."""
+    if PROMETHEUS_AVAILABLE and INFLIGHT_TASKS is not None:
+        INFLIGHT_TASKS.labels(queue=queue).set(count)
+
+
+def record_throttled(queue: str, mode: str) -> None:
+    """Record a submission held back by a queue throttle; mode is 'backfill' or 'lookback'."""
+    if PROMETHEUS_AVAILABLE and THROTTLED is not None:
+        THROTTLED.labels(queue=queue, mode=mode).inc()
+
+
+def record_message_expired(queue: str) -> None:
+    """Record a block task message discarded by a worker after its message TTL."""
+    if PROMETHEUS_AVAILABLE and MESSAGES_EXPIRED is not None:
+        MESSAGES_EXPIRED.labels(queue=queue).inc()
 
 
 def observe_task_execution_time(task_name: str, duration: float) -> None:

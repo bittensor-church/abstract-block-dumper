@@ -4,9 +4,12 @@ from typing import Any, NoReturn
 import django
 import pytest
 from celery import Celery
+from celery.signals import task_revoked
 from django.conf import settings
 
+from abstract_block_dumper._internal.dal.dumper_registry import dumper_registry
 from abstract_block_dumper._internal.dal.memory_registry import RegistryItem, task_registry
+from abstract_block_dumper._internal.services.celery_signals import EXPIRED_MESSAGES_DISPATCH_UID
 from abstract_block_dumper.v1.decorators import block_task
 
 from .django_fixtures import *  # noqa: F401, F403
@@ -98,10 +101,20 @@ def setup_test_tasks():
 @pytest.fixture(autouse=True)
 def cleanup_memory_registry():
     task_registry.clear()
+    dumper_registry.clear()
 
     yield
 
     task_registry.clear()
+    dumper_registry.clear()
+
+
+@pytest.fixture(autouse=True)
+def disconnect_worker_signals():
+    """Disconnect the `task_revoked` handler that worker setup connects for the whole process."""
+    yield
+
+    task_revoked.disconnect(dispatch_uid=EXPIRED_MESSAGES_DISPATCH_UID)
 
 
 @pytest.fixture
