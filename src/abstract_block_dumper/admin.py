@@ -1,6 +1,15 @@
-from django.contrib import admin
+from typing import Any
 
+from django.contrib import admin
+from django.http import HttpRequest
+
+from abstract_block_dumper._internal.dal.dumper_registry import dumper_registry
 from abstract_block_dumper.models import TaskAttempt
+
+# Columns only `BlockDumper` attempts fill; projects without a BlockDumper do not see them.
+BLOCK_DUMPER_FILTERS = ["give_up_reason", "dispatch_queue"]
+BLOCK_DUMPER_EXECUTION_FIELDS = ("dispatch_queue", "dispatched_at", "lease_expires_at")
+BLOCK_DUMPER_RETRY_FIELDS = ("give_up_at", "give_up_reason")
 
 
 @admin.register(TaskAttempt)
@@ -73,3 +82,22 @@ class TaskAttemptAdmin(admin.ModelAdmin):
             },
         ),
     )
+
+    def get_list_filter(self, request: HttpRequest) -> Any:
+        if not dumper_registry.dumpers():
+            return self.list_filter
+        return ["status", *BLOCK_DUMPER_FILTERS, "executable_path"]
+
+    def get_readonly_fields(self, request: HttpRequest, obj: Any = None) -> Any:
+        if not dumper_registry.dumpers():
+            return self.readonly_fields
+        return [*self.readonly_fields, *BLOCK_DUMPER_EXECUTION_FIELDS, *BLOCK_DUMPER_RETRY_FIELDS]
+
+    def get_fieldsets(self, request: HttpRequest, obj: Any = None) -> Any:
+        if not dumper_registry.dumpers():
+            return self.fieldsets
+        extra = {"Task Execution": BLOCK_DUMPER_EXECUTION_FIELDS, "Retry Information": BLOCK_DUMPER_RETRY_FIELDS}
+        return tuple(
+            (name, {**options, "fields": (*options["fields"], *extra.get(name or "", ()))})
+            for name, options in self.fieldsets
+        )

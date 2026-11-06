@@ -19,14 +19,17 @@ from abstract_block_dumper._internal.services.metrics import (
     set_current_block,
     set_registered_tasks,
 )
+from abstract_block_dumper._internal.services.queue_monitor import QueueMonitor
+from abstract_block_dumper._internal.services.reconciler import QueueReconciler, queue_reconciler_factory
+from abstract_block_dumper._internal.services.recovery_settings import (
+    DEFAULT_STALE_TASK_SWEEP_BATCH_SIZE,
+    DEFAULT_STALE_TASK_SWEEP_INTERVAL_SECONDS,
+    DEFAULT_STALE_TASK_TIMEOUT_SECONDS,
+    stale_task_settings,
+)
 from abstract_block_dumper._internal.services.window_backfiller import WindowBackfiller
 
 logger = structlog.get_logger(__name__)
-
-# Stuck-task sweep defaults; see BLOCK_DUMPER_STALE_TASK_* in the README.
-DEFAULT_STALE_TASK_TIMEOUT_SECONDS = 1800
-DEFAULT_STALE_TASK_SWEEP_INTERVAL_SECONDS = 60
-DEFAULT_STALE_TASK_SWEEP_BATCH_SIZE = 200
 
 
 class BlockStateResolver(Protocol):
@@ -71,6 +74,8 @@ class TaskScheduler:
         stale_task_timeout: float | None = DEFAULT_STALE_TASK_TIMEOUT_SECONDS,
         stale_task_sweep_interval: float = DEFAULT_STALE_TASK_SWEEP_INTERVAL_SECONDS,
         stale_task_batch_size: int = DEFAULT_STALE_TASK_SWEEP_BATCH_SIZE,
+        queue_monitor: QueueMonitor | None = None,
+        queue_reconciler: QueueReconciler | None = None,
     ) -> None:
         self.block_processor = block_processor
         self.poll_interval = poll_interval
@@ -84,6 +89,8 @@ class TaskScheduler:
         self.stale_task_timeout = stale_task_timeout
         self.stale_task_sweep_interval = stale_task_sweep_interval
         self.stale_task_batch_size = stale_task_batch_size
+        self.queue_monitor = queue_monitor
+        self.queue_reconciler = queue_reconciler
         self._last_reconcile_at: float | None = None
 
     def start(self) -> None:
@@ -190,27 +197,37 @@ class TaskScheduler:
 
     def _maybe_reconcile_stuck_tasks(self) -> None:
         """
-        Re-dispatch stuck attempts, at most once per sweep interval.
+        Run the reconciliation sweep, at most once per sweep interval.
 
         The sweep is what brings back a task whose Celery message was lost after its row
         was committed (database or broker outage, dead worker). It runs in this loop because
         the scheduler is the one process that always exists and already owns the registry
-        and the executor. A failing sweep costs one sweep, never a poll, and the timestamp
-        is taken before the call so a persistent failure is retried once per interval
-        rather than on every tick.
+        and the executor. Each sweep checks the `BlockDumper` queues, recovers `@block_task`
+        attempts, then recovers `BlockDumper` attempts. Without a stuck-task timeout the
+        `@block_task` part is skipped and `BlockDumper` recovery skips attempts that only
+        their age shows to be lost. A failing part is logged and costs only itself, never a
+        poll, and the timestamp is taken first so a persistent failure is retried once per
+        interval rather than on every tick.
         """
-        if self.stale_task_timeout is None:
-            return
-
         now = time.monotonic()
         if self._last_reconcile_at is not None and now - self._last_reconcile_at < self.stale_task_sweep_interval:
             return
         self._last_reconcile_at = now
 
         head_block = max(self.observed_blocks.values()) if self.observed_blocks else None
+        if self.queue_monitor is not None:
+            try:
+                self.queue_monitor.check()
+            except Exception:
+                logger.exception("Block task queue check failed")
+        if self.stale_task_timeout is not None:
+            self._recover_block_task_attempts(self.stale_task_timeout, head_block)
+        self._recover_block_dumper_attempts(head_block)
+
+    def _recover_block_task_attempts(self, stale_after_seconds: float, head_block: int | None) -> None:
         try:
             recovered = self.block_processor.reconcile_stuck_tasks(
-                stale_after_seconds=self.stale_task_timeout,
+                stale_after_seconds=stale_after_seconds,
                 limit=self.stale_task_batch_size,
                 head_block=head_block,
             )
@@ -219,6 +236,21 @@ class TaskScheduler:
             return
         if recovered:
             logger.info("Stuck task reconciliation completed", recovered=recovered, head_block=head_block)
+
+    def _recover_block_dumper_attempts(self, head_block: int | None) -> None:
+        if self.queue_reconciler is None:
+            return
+        try:
+            recovered = self.queue_reconciler.reconcile(
+                stale_after_seconds=self.stale_task_timeout,
+                limit=self.stale_task_batch_size,
+                head_block=head_block,
+            )
+        except Exception:
+            logger.exception("BlockDumper task recovery failed")
+            return
+        if recovered:
+            logger.info("BlockDumper task recovery completed", recovered=recovered, head_block=head_block)
 
     @staticmethod
     def _group_by_block_source(registry_items: list[RegistryItem]) -> dict[BlockSource, list[RegistryItem]]:
@@ -279,30 +311,6 @@ class TaskScheduler:
         logger.info("TaskScheduler stopped.")
 
 
-def _is_positive_number(value: object) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool) and value > 0
-
-
-def _stale_task_settings() -> tuple[float | None, float, int]:
-    """Read and validate the stuck-task sweep settings."""
-    timeout = getattr(settings, "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS", DEFAULT_STALE_TASK_TIMEOUT_SECONDS)
-    interval = getattr(
-        settings, "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS", DEFAULT_STALE_TASK_SWEEP_INTERVAL_SECONDS
-    )
-    batch_size = getattr(settings, "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE", DEFAULT_STALE_TASK_SWEEP_BATCH_SIZE)
-
-    if timeout is not None and not _is_positive_number(timeout):
-        msg = "BLOCK_DUMPER_STALE_TASK_TIMEOUT_SECONDS must be a positive number or None"
-        raise ValueError(msg)
-    if not _is_positive_number(interval):
-        msg = "BLOCK_DUMPER_STALE_TASK_SWEEP_INTERVAL_SECONDS must be a positive number"
-        raise ValueError(msg)
-    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
-        msg = "BLOCK_DUMPER_STALE_TASK_SWEEP_BATCH_SIZE must be a positive integer"
-        raise ValueError(msg)
-    return timeout, interval, batch_size
-
-
 def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
     """
     Factory for TaskScheduler.
@@ -320,7 +328,7 @@ def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
     )
     state_resolver = DefaultBlockStateResolver(bittensor_client=bittensor_client)
     block_processor = block_processor_factory()
-    stale_task_timeout, stale_task_sweep_interval, stale_task_batch_size = _stale_task_settings()
+    stale_task_timeout, stale_task_sweep_interval, stale_task_batch_size = stale_task_settings()
     return TaskScheduler(
         block_processor=block_processor,
         poll_interval=getattr(settings, "BLOCK_DUMPER_POLL_INTERVAL", 5),
@@ -331,4 +339,6 @@ def task_scheduler_factory(network: str | None = None) -> TaskScheduler:
         stale_task_timeout=stale_task_timeout,
         stale_task_sweep_interval=stale_task_sweep_interval,
         stale_task_batch_size=stale_task_batch_size,
+        queue_monitor=QueueMonitor(),
+        queue_reconciler=queue_reconciler_factory(block_processor.registry),
     )

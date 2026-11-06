@@ -29,6 +29,32 @@ def get_current_celery_task_id() -> str:
     return str(celery_task_id)
 
 
+def get_current_message_id() -> str | None:
+    """Id of the Celery task message being executed, or None outside a Celery task."""
+    try:
+        return current_task.request.id
+    except AttributeError:
+        return None
+
+
+def get_current_time_limit() -> float | None:
+    """
+    Hard time limit the worker enforces on the Celery task being executed.
+
+    Mirrors the worker's own precedence: the limit sent with the message, the task's
+    `time_limit`, then the app's `task_time_limit`, which the worker's pool applies to tasks
+    without a limit of their own. None when no hard limit applies or outside a Celery task.
+    """
+    try:
+        request = current_task.request
+        task_time_limit = current_task.time_limit
+        app_time_limit = current_task.app.conf.task_time_limit
+    except AttributeError:
+        return None
+    message_time_limit, _soft_time_limit = request.timelimit or (None, None)
+    return message_time_limit or task_time_limit or app_time_limit
+
+
 def get_executable_path(func: Callable) -> str:
     """Get executable path for the callable `func`."""
     return ".".join([func.__module__, func.__name__])

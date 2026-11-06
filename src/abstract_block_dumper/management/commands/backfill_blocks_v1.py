@@ -3,16 +3,19 @@ import time
 from dataclasses import dataclass
 from typing import TypedDict, Unpack
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 import abstract_block_dumper._internal.dal.django_dal as abd_dal
+from abstract_block_dumper._internal.contacts.broker import QueueArgumentsMismatchError
 from abstract_block_dumper._internal.dal.memory_registry import task_registry
 from abstract_block_dumper._internal.discovery import ensure_modules_loaded
+from abstract_block_dumper._internal.exceptions import QueueConfigurationError
 from abstract_block_dumper._internal.services.backfill_scheduler import (
     ARCHIVE_BLOCK_THRESHOLD,
     BackfillScheduler,
     backfill_scheduler_factory,
 )
+from abstract_block_dumper._internal.services.celery_config import prepare_block_dumpers, queue_setup_error_message
 
 SECONDS_PER_HOUR = 3600
 SECONDS_PER_MINUTE = 60
@@ -126,6 +129,11 @@ class Command(BaseCommand):
         if functions_counter == 0:
             self.stderr.write(self.style.WARNING("No functions registered. Nothing to backfill."))
             return
+
+        try:
+            prepare_block_dumpers(verify_broker=not options["dry_run"])
+        except (QueueArgumentsMismatchError, QueueConfigurationError) as exc:
+            raise CommandError(queue_setup_error_message(exc)) from exc
 
         # Determine block range
         if from_block is None or to_block is None:
